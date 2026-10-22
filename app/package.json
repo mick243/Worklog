@@ -1,0 +1,34 @@
+{
+  "name": "cc-worklog",
+  "version": "0.1.0",
+  "description": "Claude Code 세션 기록과 여러 저장소의 git log를 합쳐, 비밀 값을 가린 날짜별 작업일지를 내 컴퓨터 안에서 만들어 주는 CLI",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "cc-worklog": "dist/src/cli.js"
+  },
+  "files": [
+    "dist/src"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "claude-code",
+    "worklog",
+    "git",
+    "redaction",
+    "cli"
+  ],
+  "scripts": {
+    "clean": "node scripts/clean.mjs",
+    "build": "node scripts/clean.mjs && tsc -p tsconfig.json && node scripts/copy-assets.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test --test-concurrency=1 \"dist/test/**/*.test.js\"",
+    "start": "node dist/src/cli.js"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "^7.0.2"
+  }
+}

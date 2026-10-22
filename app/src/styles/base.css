@@ -1,0 +1,600 @@
+/* 레이아웃. docs/DESIGN.md "주요 화면 구성"을 옮겼어요(취합 2회차, 2026-10-20).
+   색·글꼴·간격·모서리는 tokens.css의 변수로만 써요(색 값을 여기에 직접 쓰지 않아요).
+   가장 좁은 너비(320px)를 기본으로 두고 400px(S2 시각 칸이 왼쪽으로 감)·640px(S1 표 모양)에서 펼쳐요.
+   어떤 너비에서도 가로 스크롤이 생기지 않게 하고, 움직임(애니메이션)은 쓰지 않아요. */
+
+/* ── 공통 ─────────────────────────────── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-body);
+  font-size: var(--font-size);
+  line-height: var(--line-height);
+  font-variant-numeric: tabular-nums;
+}
+h1,
+h2,
+p {
+  margin: 0;
+}
+h1 {
+  font-size: var(--font-size-xl);
+  font-weight: 700;
+  line-height: 1.35;
+}
+a {
+  color: var(--color-primary);
+  text-underline-offset: 2px;
+}
+a:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
+code,
+pre,
+.mono,
+.path,
+.hash,
+.branch {
+  font-family: var(--font-mono);
+  font-size: 1em;
+}
+.path,
+.hash,
+.branch,
+.redacted,
+.md-path__value {
+  overflow-wrap: anywhere;
+}
+.muted {
+  color: var(--color-muted);
+}
+.label {
+  color: var(--color-muted);
+  font-size: var(--font-size-sm);
+}
+
+/* 맨 위 막대 · 본문 · 맨 아래: 본문 최대 너비에서 가운데 정렬, 좌우 여백은 좁을 때 16px, 640px부터 24px */
+.topbar,
+.content,
+.footer {
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding-left: calc(var(--space) * 2);
+  padding-right: calc(var(--space) * 2);
+}
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: calc(var(--space) / 2) calc(var(--space) * 2);
+  padding-top: calc(var(--space) * 2);
+  padding-bottom: var(--space);
+}
+.topbar__brand {
+  color: var(--color-text);
+  text-decoration: none;
+}
+.topbar__brand .mono {
+  font-weight: 700;
+}
+.topbar__note {
+  color: var(--color-muted);
+  font-size: var(--font-size-sm);
+}
+.content {
+  padding-bottom: calc(var(--space) * 3);
+}
+/* 기준 줄 (S1·S2 공통, I-12): 맨 위 막대 바로 아래 본문 맨 앞, 늘 있음. 보조 글자이고 배경·테두리 없이 아래 내용과 --space×2 떨어져요.
+   좁으면 낱말 사이에서 줄을 바꿔요. */
+.basis {
+  margin: 0 0 calc(var(--space) * 2);
+  font-size: var(--font-size-sm);
+}
+.footer {
+  color: var(--color-muted);
+  font-size: var(--font-size-sm);
+  padding-top: calc(var(--space) * 2);
+  padding-bottom: calc(var(--space) * 3);
+}
+.footer p {
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space);
+}
+
+/* 알림 배너: 삭제 임박(호박색) · 오류(빨강) · 알림(무채색). 늘 글자 이름표와 함께 써요. */
+.banner {
+  border-radius: var(--radius);
+  padding: var(--space) calc(var(--space) * 1.5);
+  margin: calc(var(--space) * 2) 0;
+  overflow-wrap: anywhere;
+}
+.banner__title,
+.banner > strong:first-child {
+  margin-right: var(--space);
+}
+.banner--warning {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+.banner--error {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+}
+/* 보관 실패만 있을 때의 보관 실패 배너: 흰 바탕 + 테두리 (삭제 임박이 섞이면 --warning) */
+.banner--pending {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+.banner--info {
+  background: var(--color-neutral-bg);
+  color: var(--color-text);
+}
+
+/* 상태 모양: 글꼴 기호 대신 CSS 도형으로 그려요(기호 글자는 숨겨요). */
+.shape {
+  display: inline-block;
+  flex: none;
+  width: 0.625em;
+  height: 0.625em;
+  overflow: hidden;
+  white-space: nowrap;
+  text-indent: 200%;
+  background: currentColor;
+}
+.shape--circle {
+  border-radius: 50%;
+}
+.shape--ring {
+  background: transparent;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+}
+.shape--triangle {
+  width: 0.75em;
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+}
+.shape--dash {
+  width: 0.75em;
+  height: 2px;
+  vertical-align: 0.3em;
+}
+
+/* 보관 상태 배지 (S1·S2 같음) */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--space) / 2);
+  padding: 0 calc(var(--space) / 2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  font-weight: 400;
+  line-height: var(--line-height);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.badge--archived {
+  color: var(--color-success);
+  background: var(--color-success-bg);
+}
+.badge--pending {
+  color: var(--color-muted);
+  border-color: var(--color-border);
+}
+.badge--imminent {
+  color: var(--color-warning);
+  background: var(--color-warning-bg);
+}
+.badge--archive-only {
+  color: var(--color-muted);
+  background: var(--color-neutral-bg);
+}
+.badge--no-sessions {
+  color: var(--color-muted);
+  padding: 0;
+}
+
+/* 가린 자리 칩: 보라 점선. 칩 안 글자는 마크다운의 가림 표시 그대로예요. */
+.redacted {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-redacted-text);
+  background: var(--color-redacted-bg);
+  border: 1px dashed var(--color-redacted-border);
+  border-radius: var(--radius-sm);
+  padding: 0 calc(var(--space) / 2);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+/* 실행할 명령 상자 (빈 상태) */
+.command {
+  display: inline-block;
+  max-width: 100%;
+  margin: var(--space) 0 0;
+  padding: var(--space) calc(var(--space) * 1.5);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+.banner code,
+.toc code {
+  overflow-wrap: anywhere;
+}
+
+/* 빈 상태: 가운데 한 줄 + 안내. 그림은 넣지 않아요. */
+.empty {
+  text-align: center;
+  padding: calc(var(--space) * 3) 0;
+}
+.empty p + p {
+  margin-top: var(--space);
+}
+
+/* ── S1 날짜 목록 ─────────────────────── */
+.summary {
+  margin: calc(var(--space) * 2) 0;
+}
+.summary p {
+  margin-top: calc(var(--space) / 2);
+  font-size: var(--font-size-sm);
+}
+.month {
+  margin-top: calc(var(--space) * 3);
+}
+.month h2 {
+  font-size: var(--font-size);
+  font-weight: 700;
+  margin-bottom: var(--space);
+}
+/* 흰 카드 하나에 날짜 행을 담고 행 사이를 구분선으로 나눠요. 640px 미만은 두 줄 배치예요. */
+.date-list {
+  display: block;
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.date-list thead {
+  display: none;
+}
+.date-list tbody,
+.date-list td {
+  display: block;
+}
+.date-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: var(--space);
+  align-items: baseline;
+  padding: var(--space) calc(var(--space) * 2);
+  border-top: 1px solid var(--color-border);
+}
+.date-row:first-child {
+  border-top: 0;
+}
+.date-row td {
+  padding: 0;
+}
+.date-row .num {
+  display: none;
+}
+.date-row__date {
+  grid-column: 1;
+  min-width: 0;
+}
+.date-row__status {
+  grid-column: 2;
+  grid-row: 1;
+  text-align: right;
+}
+.date-row__link {
+  font-weight: 700;
+  text-decoration: none;
+}
+/* 행 전체를 누를 수 있게 링크를 행 크기로 늘려요. */
+.date-row__link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+.date-row__link:focus-visible {
+  box-shadow: none;
+}
+.date-row__link:focus-visible::after {
+  box-shadow: var(--focus-ring-inset);
+  border-radius: inherit;
+}
+.date-row__compact {
+  display: block;
+  font-size: var(--font-size-sm);
+}
+.date-row:hover,
+.date-row:focus-within {
+  background: var(--color-surface-hover);
+}
+.date-row:hover .date-row__link {
+  text-decoration: underline;
+}
+
+@media (min-width: 640px) {
+  .topbar,
+  .content,
+  .footer {
+    padding-left: calc(var(--space) * 3);
+    padding-right: calc(var(--space) * 3);
+  }
+  /* 한 줄 표 모양: 날짜 | 프로젝트 | 세션 | 커밋 | 보관 상태. 달 머리글 아래에 칸 이름 줄을 한 번 보여 줘요. */
+  .date-list {
+    display: table;
+  }
+  .date-list thead {
+    display: table-header-group;
+  }
+  .date-list tbody {
+    display: table-row-group;
+  }
+  .date-list tr,
+  .date-row {
+    display: table-row;
+  }
+  .date-list th,
+  .date-list td,
+  .date-row td {
+    display: table-cell;
+    padding: var(--space) calc(var(--space) * 2);
+    border-top: 1px solid var(--color-border);
+    text-align: left;
+    vertical-align: middle;
+  }
+  .date-list th {
+    border-top: 0;
+    color: var(--color-muted);
+    font-size: var(--font-size-sm);
+    font-weight: 400;
+  }
+  .date-list .num,
+  .date-row .num {
+    display: table-cell;
+    text-align: right;
+  }
+  .date-row__compact {
+    display: none;
+  }
+}
+
+/* ── S2 하루 일지 ─────────────────────── */
+.back {
+  margin-top: calc(var(--space) * 2);
+}
+.back a,
+.pager a {
+  text-decoration: none;
+}
+.back a:hover,
+.pager a:hover {
+  text-decoration: underline;
+}
+.day-head {
+  margin-top: var(--space);
+}
+.day-head h1 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space);
+}
+.day-head p {
+  margin-top: calc(var(--space) / 2);
+  font-size: var(--font-size-sm);
+}
+.pager {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space);
+  margin-top: var(--space);
+}
+/* 마크다운 파일 상자: 이름표 + 경로. 경로는 한 번 누르면 전체가 선택돼요. */
+.md-path {
+  margin: calc(var(--space) * 2) 0;
+  padding: var(--space) calc(var(--space) * 1.5);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+.md-path .label {
+  display: block;
+}
+.md-path__value {
+  -webkit-user-select: all;
+  user-select: all;
+}
+.redacted-help,
+.whole-help,
+.content > .archive-only-help {
+  margin: var(--space) 0;
+  font-size: var(--font-size-sm);
+}
+.toc {
+  margin: calc(var(--space) * 2) 0;
+  overflow-wrap: anywhere;
+}
+.toc .label {
+  margin-right: var(--space);
+}
+
+/* 프로젝트 묶음 */
+.project {
+  margin-top: calc(var(--space) * 3);
+}
+.project__head {
+  padding-bottom: var(--space);
+  border-bottom: 1px solid var(--color-border);
+}
+.project__head h2 {
+  font-size: var(--font-size-lg);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.project__head p {
+  margin-top: calc(var(--space) / 2);
+  font-size: var(--font-size-sm);
+}
+.project--none .project__head {
+  background: var(--color-neutral-bg);
+  border-bottom: 0;
+  border-radius: var(--radius);
+  padding: var(--space) calc(var(--space) * 1.5);
+}
+.note {
+  color: var(--color-muted);
+}
+
+/* 시간 줄: 400px 미만은 시각을 항목 위에 올리고, 400px 이상은 왼쪽 시각 칸(약 56px) + 얇은 세로선이에요. */
+.timeline {
+  list-style: none;
+  margin: calc(var(--space) * 1.5) 0 0;
+  padding: 0;
+}
+.timeline__item {
+  margin-bottom: calc(var(--space) * 1.5);
+}
+.timeline__time {
+  color: var(--color-muted);
+  font-size: var(--font-size-sm);
+  margin-bottom: calc(var(--space) / 2);
+}
+.next-day {
+  font-size: var(--font-size-sm);
+}
+.timeline__body {
+  min-width: 0;
+}
+
+/* 세션 카드: 흰 카드 + 왼쪽 3px 파랑 줄 + "세션" 이름표 */
+.session {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-primary);
+  border-radius: var(--radius);
+  padding: var(--space) calc(var(--space) * 1.5);
+}
+.session p + p {
+  margin-top: calc(var(--space) / 2);
+}
+.session__title {
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.session__meta,
+.session__extra {
+  font-size: var(--font-size-sm);
+}
+.session__req,
+.session__cwd {
+  overflow-wrap: anywhere;
+}
+.session__req .label,
+.session__cwd .label {
+  margin-right: var(--space);
+}
+.session__extra .badge {
+  margin-left: calc(var(--space) / 2);
+}
+.tag {
+  margin-right: calc(var(--space) / 2);
+  color: var(--color-muted);
+  font-size: var(--font-size-sm);
+  font-weight: 400;
+}
+.add {
+  color: var(--color-diff-add);
+}
+.del {
+  color: var(--color-diff-del);
+}
+.branch {
+  padding: 0 calc(var(--space) / 2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+}
+
+/* 커밋 줄: 카드 없이 가벼운 한 줄. 좁으면 메시지가 다음 줄로 내려가요. */
+.commit {
+  position: relative;
+}
+.commit__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--space);
+}
+.commit__head .tag {
+  margin-right: 0;
+}
+.hash {
+  font-size: var(--font-size-sm);
+}
+/* 남은 폭이 16em 이상이면 같은 줄에서 줄을 바꾸고, 그보다 좁으면 다음 줄로 내려가요. */
+.commit__subject {
+  flex: 1 1 16em;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (min-width: 400px) {
+  .timeline__item {
+    display: grid;
+    grid-template-columns: calc(var(--space) * 7) minmax(0, 1fr);
+    margin-bottom: 0;
+  }
+  .timeline__time {
+    margin: 0;
+    padding: calc(var(--space) + 1px) var(--space) 0 0;
+  }
+  .next-day {
+    display: block;
+    line-height: 1.3;
+  }
+  .timeline__body {
+    border-left: 1px solid var(--color-border);
+    padding: 0 0 calc(var(--space) * 1.5) calc(var(--space) * 2);
+  }
+  .commit {
+    padding-top: var(--space);
+  }
+  /* 시간 줄 위의 빈 원 점 */
+  .commit::before {
+    content: "";
+    position: absolute;
+    left: calc(var(--space) * -2 - 5px);
+    top: calc(var(--space) + 0.8em - 4px);
+    width: 9px;
+    height: 9px;
+    border: 1.5px solid var(--color-muted);
+    border-radius: 50%;
+    background: var(--color-bg);
+  }
+}
