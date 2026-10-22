@@ -1,0 +1,67 @@
+/* 디자인 토큰. docs/DESIGN.md "디자인 토큰" 표를 그대로 옮겼어요(취합 2회차, 2026-10-20).
+   라이트 값은 :root, 다크 모드에서 바뀌는 값만 prefers-color-scheme: dark 안에서 덮어써요.
+   화면은 OS 설정을 그대로 따르고 바꾸는 버튼은 없어요. 화면 코드는 이 변수만 써요(색 값을 직접 쓰지 않아요).
+   글꼴은 사용자 컴퓨터에 깔린 시스템 글꼴만 써요(외부 글꼴·CDN 없음). */
+:root {
+  color-scheme: light dark;
+
+  /* 기본 9개 */
+  --color-bg: #F6F6F4;
+  --color-surface: #FFFFFF;
+  --color-text: #1F2328;
+  --color-muted: #5E6672;
+  --color-primary: #2F5BB7;
+  --color-danger: #B42318;
+  --font-body: system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", "Noto Sans CJK KR", sans-serif;
+  --radius: 6px;
+  --space: 8px; /* 모든 간격은 이 값의 0.5·1·1.5·2·3배로만 써요 */
+
+  /* DESIGN.md에서 더한 것 */
+  --color-border: #E2E2DE;
+  --color-surface-hover: #EEF2FA;
+  --color-neutral-bg: #EEEEEA;
+  --color-success: #17702F;
+  --color-success-bg: #E8F5EC;
+  --color-warning: #8A5300;
+  --color-warning-bg: #FFF4DE;
+  --color-danger-bg: #FDECEA;
+  --color-diff-add: var(--color-success);
+  --color-diff-del: var(--color-danger);
+  --color-redacted-text: #5B3FA6;
+  --color-redacted-bg: #EFEAFB;
+  --color-redacted-border: #A08BD8;
+  --font-mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, "D2Coding", "Noto Sans Mono CJK KR", monospace;
+  --font-size: 0.9375rem;
+  --font-size-sm: 0.8125rem;
+  --font-size-lg: 1.0625rem;
+  --font-size-xl: 1.375rem;
+  --line-height: 1.6;
+  --radius-sm: 4px;
+  --content-max: 880px;
+  --focus-ring: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-primary);
+
+  /* 취합에서 더한 것: 카드 안 날짜 행처럼 바깥 테두리가 잘리는 자리의 포커스 표시 */
+  --focus-ring-inset: inset 0 0 0 2px var(--color-primary);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #14161A;
+    --color-surface: #1C1F25;
+    --color-text: #E6E8EB;
+    --color-muted: #9AA3AF;
+    --color-primary: #7EA6F8;
+    --color-danger: #FF8A80;
+    --color-border: #2F343D;
+    --color-surface-hover: #232A38;
+    --color-neutral-bg: #262A31;
+    --color-success: #5FCB7C;
+    --color-success-bg: #173222;
+    --color-warning: #E8B04A;
+    --color-warning-bg: #3A2C10;
+    --color-danger-bg: #3B1D1D;
+    --color-redacted-text: #CDBDFF;
+    --color-redacted-bg: #2C2545;
+    --color-redacted-border: #7C68C4;
+  }
+}
