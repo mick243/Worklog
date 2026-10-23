@@ -1,6 +1,7 @@
 // F1 날짜·프로젝트별 작업일지 만들기.
 // 재료는 보관본(F3)만 써요. 그래서 원본 세션 파일이 지워져도 같은 설정이면 똑같은 일지가 나와요.
-// 요약은 규칙 기반이고 AI도 네트워크도 쓰지 않아요.
+// 기본 요약은 규칙 기반이고 AI도 네트워크도 쓰지 않아요. 요약 옵션(A24)을 켠 일지의 AI 요약 한 줄은 여기서 부르지 않고,
+// commands/make.ts가 summary/의 도구로 받아 둔 글을 applySummaries로 넣어요.
 //
 // 여러 날을 한 번에 만들 때(A18) 날짜마다 보관본 전체를 처음부터 다시 읽지 않게, 보관본은 실행마다 한 번만 훑어요(PRD 5장).
 // 훑으면서 날짜별 세션 재료를 모으고, 파일마다 "이 파일이 걸친 날짜 범위(보관 색인의 첫·마지막 대화 시각)"와 그 파일의 제목·
@@ -15,7 +16,7 @@ import { inspectRoots, RepoResolver, type RepoInfo, type RootIssue } from '../gi
 import { EMAIL_LABEL, maskIdentity, USER_NAME_LABEL } from '../redact/identity.js';
 import { countMarkers, neutralizeMarkers } from '../redact/marker.js';
 import { type Redactor } from '../redact/redact.js';
-import { costFields, userRequestText, type CostFields, type Json } from '../session/format.js';
+import { assistantReplyText, costFields, userRequestText, type CostFields, type Json } from '../session/format.js';
 import { relPosix, walkFiles } from '../util/fs.js';
 import { readLines } from '../util/lines.js';
 import { oneLine, truncateKeepingMarkers } from '../util/text.js';
@@ -24,6 +25,8 @@ import { renderProjects } from './markdown.js';
 import type { CommitLog, DayLog, ProjectLog, SessionLog } from './types.js';
 
 export const REQUEST_MAX = 100;
+/** AI 요약 한 줄의 길이 상한 (A24: 150자 이하, 넘으면 가림 표시를 끊지 않고 잘라요) */
+export const SUMMARY_MAX = 150;
 const TITLE_MAX = 120;
 const SUBJECT_MAX = 200;
 /** 사용 시간을 추정할 때, 줄 사이 간격이 이보다 길면 쉰 것으로 봐요 */
@@ -39,6 +42,80 @@ interface Agg {
   cwd: { ts: number; cwd: string; main: boolean } | null;
   branches: Map<string, number>;
   subagentFiles: Set<string>;
+  /**
+   * AI 요약 재료의 표지와 찾을 곳 (A25·A27). 세션 본 기록(서브 에이전트 기록·사이드체인 빼고)의 그날 요청·답변 줄만 세요.
+   * 원문은 담지 않아요(요약을 부를 세션만 summary/material.ts가 이 파일들을 다시 읽어요).
+   */
+  mainUser: number;
+  mainAssistant: number;
+  /** 그날 마지막 본 기록 요청·답변 줄 시각 (ms, 없으면 0) */
+  mainLast: number;
+  /** 그날 본 기록에 요청 글이나 답변 글이 있는지 (요약 대상 세션) */
+  hasText: boolean;
+  mainFiles: Set<string>;
+}
+
+/** 요약 재료의 표지 (A27): 그날 본 기록의 요청·답변 줄 수와 마지막 줄 시각. 원문은 없어요. 그날 줄이 늘면 달라져요. */
+export interface MaterialMark {
+  userLines: number;
+  assistantLines: number;
+  /** ISO, 그날 본 기록 줄이 없으면 null */
+  lastLineAt: string | null;
+}
+
+/** 세션 하나·날짜 하나의 AI 요약 준비물 (부르지 않을 세션도 표지는 있어요) */
+export interface SummaryInput {
+  sessionId: string;
+  /** 요약 대상 세션 (그날 본 기록에 요청·답변 글이 있음) */
+  target: boolean;
+  mark: MaterialMark;
+  /** 그날 본 기록 줄이 있는 보관본 파일 (절대 경로) */
+  files: string[];
+  /** 세션 제목 (보관본의 custom-title, 없으면 ai-title). 보관본 글이라 이미 가린 글이고, 보내기 전에 지금 규칙으로 한 번 더 가려요. */
+  title: string | null;
+}
+
+/**
+ * 일지 글 다듬기: 가리기(F2, 지금 규칙) → 이름·이메일 가리기(옵션) → 한 줄로 → 가림 표시를 끊지 않고 자르기.
+ * 보관본·요약 저장 파일의 글은 이미 가린 글이지만, 나중에 더한 사용자 패턴도 일지에 적용되게 한 번 더 가려요.
+ */
+export function cleanText(redactor: Redactor, s: string | null | undefined, max: number, hideIdentity: boolean): string | null {
+  if (s === null || s === undefined) return null;
+  let t = redactor.redactString(s);
+  if (hideIdentity) t = maskIdentity(t);
+  t = oneLine(t);
+  if (!t) return null;
+  return truncateKeepingMarkers(t, max);
+}
+
+/** 일지의 가린 자리 수를 마크다운에 실제로 들어간 표시 기준으로 다시 세요 (화면도 같은 내용을 보여 줘요). */
+export function recountDay(day: DayLog): void {
+  day.redactions = {};
+  day.identity = {};
+  for (const [k, v] of Object.entries(countMarkers(renderProjects(day)))) {
+    if (k === USER_NAME_LABEL || k === EMAIL_LABEL) {
+      if (day.hideIdentity) day.identity[k] = v;
+    } else {
+      day.redactions[k] = v;
+    }
+  }
+}
+
+/**
+ * 요약을 켠 일지로 만들어요 (A24·A27·A28). summaries는 세션 아이디 → 요약 저장 파일의 글(F2로 가린 글)이고, 없으면 그 세션 요약 줄은 비워요.
+ * 일지에 넣을 때 지금 규칙으로 한 번 더 가리고, 이름·이메일 가리기가 켜진 일지면 그것도 한 뒤 한 줄로 만들어 150자로 잘라요.
+ * 가린 자리 수(마크다운 머리·S3·S2)에도 요약 줄의 자리가 들어가게 다시 세요.
+ */
+export function applySummaries(day: DayLog, redactor: Redactor, inputs: Map<string, SummaryInput>, summaries: Map<string, string>): void {
+  day.summaryEnabled = true;
+  for (const p of day.projects) {
+    for (const s of p.sessions) {
+      s.summaryTarget = inputs.get(s.sessionId)?.target === true;
+      const text = summaries.get(s.sessionId);
+      s.summary = s.summaryTarget && text ? cleanText(redactor, text, SUMMARY_MAX, day.hideIdentity) : null;
+    }
+  }
+  recountDay(day);
 }
 
 interface Meta {
@@ -289,7 +366,21 @@ export class WorklogBuilder {
             if (!aggs) this.aggsByDate.set(date, (aggs = new Map()));
             let a = aggs.get(sid);
             if (!a) {
-              a = { sid, times: [], firstReq: null, lastReq: null, requests: 0, cwd: null, branches: new Map(), subagentFiles: new Set() };
+              a = {
+                sid,
+                times: [],
+                firstReq: null,
+                lastReq: null,
+                requests: 0,
+                cwd: null,
+                branches: new Map(),
+                subagentFiles: new Set(),
+                mainUser: 0,
+                mainAssistant: 0,
+                mainLast: 0,
+                hasText: false,
+                mainFiles: new Set(),
+              };
               aggs.set(sid, a);
             }
             a.times.push(ts);
@@ -302,6 +393,14 @@ export class WorklogBuilder {
               if (prev === undefined || ts < prev) a.branches.set(o.gitBranch, ts);
             }
             const req = main ? userRequestText(o) : null;
+            if (main) {
+              // AI 요약 재료의 표지(요청·답변 줄 수와 마지막 줄 시각)와 요약 대상인지 (A25·A27). 원문은 기억하지 않아요.
+              if (o.type === 'user') a.mainUser++;
+              else a.mainAssistant++;
+              if (ts > a.mainLast) a.mainLast = ts;
+              a.mainFiles.add(file);
+              if (!a.hasText && (req !== null || assistantReplyText(o) !== null)) a.hasText = true;
+            }
             if (req) {
               a.requests++;
               if (!a.firstReq || ts < a.firstReq.ts) a.firstReq = { ts, text: req };
@@ -345,6 +444,28 @@ export class WorklogBuilder {
     return metas;
   }
 
+  /**
+   * 날짜 하나의 세션마다 AI 요약 준비물 (A25·A27): 요약 대상인지, 재료의 표지, 재료를 다시 읽을 보관본 파일, 제목.
+   * open 때 모은 값만 써서 보관본을 다시 읽지 않아요. 원문은 들어 있지 않아요.
+   */
+  summaryInputs(date: string): Map<string, SummaryInput> {
+    const out = new Map<string, SummaryInput>();
+    const aggs = this.aggsByDate.get(date);
+    if (!aggs) return out;
+    const metas = this.metasFor(date);
+    for (const a of aggs.values()) {
+      const meta = metas.get(a.sid);
+      out.set(a.sid, {
+        sessionId: a.sid,
+        target: a.hasText,
+        mark: { userLines: a.mainUser, assistantLines: a.mainAssistant, lastLineAt: a.mainLast > 0 ? new Date(a.mainLast).toISOString() : null },
+        files: [...a.mainFiles].sort(),
+        title: meta?.customTitle ?? meta?.aiTitle ?? null,
+      });
+    }
+    return out;
+  }
+
   private commitsOf(repo: RepoInfo): { email: string | null; rows: CommitRow[] | null } {
     let c = this.commitCache.get(repo.key);
     if (!c) {
@@ -380,14 +501,7 @@ export class WorklogBuilder {
     //    보관본은 이미 가린 상태지만, 나중에 더한 사용자 패턴도 일지에 적용되게 한 번 더 가려요.
     //    보관본 글은 원문 속 가림 표시 모양 글자를 보관할 때 이미 바꿨어요. git에서 바로 읽는 글(커밋 메시지·브랜치·저장소 경로)은
     //    여기서 neutralizeMarkers로 바꾼 뒤 가려요(F2·A17).
-    const clean = (s: string | null | undefined, max: number): string | null => {
-      if (s === null || s === undefined) return null;
-      let t = redactor.redactString(s);
-      if (hideIdentity) t = maskIdentity(t);
-      t = oneLine(t);
-      if (!t) return null;
-      return truncateKeepingMarkers(t, max);
-    };
+    const clean = (s: string | null | undefined, max: number): string | null => cleanText(redactor, s, max, hideIdentity);
     const cleanPath = (p: string) => {
       let t = redactor.redactString(p);
       if (hideIdentity) t = maskIdentity(t);
@@ -540,13 +654,8 @@ export class WorklogBuilder {
     };
 
     // 6) 가린 자리 세기: 마크다운에 실제로 들어간 표시 기준 (화면도 같은 내용을 보여 줘요)
-    for (const [k, v] of Object.entries(countMarkers(renderProjects(day)))) {
-      if (k === USER_NAME_LABEL || k === EMAIL_LABEL) {
-        if (hideIdentity) day.identity[k] = v;
-      } else {
-        day.redactions[k] = v;
-      }
-    }
+    //    요약을 켠 일지는 applySummaries가 요약 줄을 넣은 뒤 다시 세요.
+    recountDay(day);
     return {
       day,
       empty: sessionCount === 0 && commitCount === 0,

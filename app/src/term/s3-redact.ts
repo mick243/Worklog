@@ -38,20 +38,44 @@ function kindName(label: string, userPatterns: string[]): string {
 const isArchive = (f: FilePlan) => f.kind === 'archive';
 const dayOf = (f: FilePlan) => f.rel.replace(/\.(md|json)$/, '');
 
-/** 보관본·일지로 나눠 세요. 일지는 날짜 하나에 .md와 화면용 .json이 있어서 날짜 수로 세요. */
+const isSummary = (f: FilePlan) => f.kind === 'summary';
+
+/**
+ * AI 요약 한 줄(A27)의 다시 가리기 문구 (DESIGN S3 다 3·6-1·7번, 끝 ①·② 글자 그대로). 요약 저장 파일이 있을 때만 나와요
+ * (요약을 켠 적이 없으면 지금 모양 그대로). 문구를 바꿀 때는 여기만 바꾸면 돼요.
+ */
+export const SUMMARY_REDACT_TEXT = {
+  /** 읽음 칸 끝 */
+  scanned: (n: number) => `요약 저장 파일 ${num(n)}개`,
+  /** 바뀔 요약 저장 파일 칸 이름과 값 */
+  label: '바뀔 요약',
+  value: (n: number) => `${num(n)}개 (요약 저장 파일, 날짜마다 하나)`,
+  /** 바뀔 자리·새로 가림 괄호 안 덩어리 */
+  part: (n: number) => `요약 ${num(n)}`,
+  /** 확인 질문·다시 씀 칸의 덩어리 */
+  files: (n: number) => `요약 저장 파일 ${num(n)}개`,
+  /** 끝 ② 결과의 폴더 이름표 (일지 폴더 다음) */
+  dir: '요약 저장 폴더',
+} as const;
+
+/** 보관본·일지·요약 저장 파일로 나눠 세요. 일지는 날짜 하나에 .md와 화면용 .json이 있어서 날짜 수로 세요. */
 function split(files: FilePlan[]) {
-  const archives = files.filter(isArchive).sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
+  const byRel = (a: FilePlan, b: FilePlan) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0);
+  const archives = files.filter(isArchive).sort(byRel);
+  const summaries = files.filter(isSummary).sort(byRel);
   // 날짜 순서, 같은 날짜는 .md 다음 .json
   const worklogs = files
-    .filter((f) => !isArchive(f))
+    .filter((f) => !isArchive(f) && !isSummary(f))
     .sort((a, b) => (dayOf(a) < dayOf(b) ? -1 : dayOf(a) > dayOf(b) ? 1 : a.kind === 'worklog-md' ? -1 : 1));
   const sum = (xs: FilePlan[]) => xs.reduce((n, f) => n + f.total, 0);
   return {
     archives,
     worklogs,
+    summaries,
     days: new Set(worklogs.map(dayOf)).size,
     archiveTotal: sum(archives),
     worklogTotal: sum(worklogs),
+    summaryTotal: sum(summaries),
     gone: archives.filter((f) => !f.originalExists).length,
   };
 }
@@ -113,7 +137,13 @@ function head(plan: RedactPlan, p: Painter): string[] {
     'cc-worklog 보관본 다시 가리기',
     row(p, '데이터 폴더', plan.dataDir),
     '',
-    row(p, '읽음', `보관본 ${num(plan.scanned.archives)}개 · 일지 ${num(plan.scanned.worklogDays)}개`),
+    row(
+      p,
+      '읽음',
+      `보관본 ${num(plan.scanned.archives)}개 · 일지 ${num(plan.scanned.worklogDays)}개${
+        plan.scanned.summaries > 0 ? ` · ${SUMMARY_REDACT_TEXT.scanned(plan.scanned.summaries)}` : ''
+      }`,
+    ),
     row(p, '규칙', `내장 ${num(plan.builtinRules)}개 · 사용자 패턴 ${num(plan.userPatterns.length)}개`),
   ];
 }
@@ -129,7 +159,7 @@ function clearedText(staged: number, tail: string): string {
  */
 export function renderRedactNothing(plan: RedactPlan, p: Painter, recovered?: RecoveryResult, clearedStaged?: number): string {
   const L = head(plan, p);
-  const none = plan.scanned.archives + plan.scanned.worklogDays === 0;
+  const none = plan.scanned.archives + plan.scanned.worklogDays + plan.scanned.summaries === 0;
   L.push(row(p, '바뀔 자리', none ? '0개 — 다시 가릴 보관본과 일지가 없어요.' : '0개 — 이미 지금 규칙으로 가려져 있어요. 바뀐 파일은 없어요.'));
   const n = notices(p, plan, recovered, clearedStaged);
   if (n.length) L.push('', ...n);
@@ -160,7 +190,13 @@ export function renderRedactPlan(plan: RedactPlan, p: Painter, recovered?: Recov
     L.push(row(p, '바뀔 일지', `${num(s.days)}개 (날짜 수 · .md와 화면용 .json을 한 줄씩)`));
     L.push(...s.worklogs.map(fileLine));
   }
-  const total = `모두 ${num(totalCount(plan.totals))}개 (보관본 ${num(s.archiveTotal)} · 일지 ${num(s.worklogTotal)})`;
+  // 요약 저장 파일도 확인 출력의 파일별 목록과 종류별 합계에 함께 들어요(A27). 없으면 지금 모양 그대로예요.
+  const sm = s.summaries.length > 0;
+  if (sm) {
+    L.push(row(p, SUMMARY_REDACT_TEXT.label, SUMMARY_REDACT_TEXT.value(s.summaries.length)));
+    L.push(...s.summaries.map(fileLine));
+  }
+  const total = `모두 ${num(totalCount(plan.totals))}개 (보관본 ${num(s.archiveTotal)} · 일지 ${num(s.worklogTotal)}${sm ? ` · ${SUMMARY_REDACT_TEXT.part(s.summaryTotal)}` : ''})`;
   L.push(...wrapParts([total, '값은 보여 주지 않아요'], ' · ', p.bold(padW('바뀔 자리', LABEL_W)), ' '.repeat(LABEL_W)));
   L.push(...kindRows(plan.totals, plan.userPatterns));
   L.push('');
@@ -183,7 +219,13 @@ export function renderRedactQuestionIntro(): string {
 /** 끝 ① 확인 질문: 늘 출력의 마지막 줄이고, 기본값은 거절이에요. */
 export function redactQuestion(plan: RedactPlan): string {
   const s = split(plan.files);
-  const what = [s.archives.length ? `보관본 ${num(s.archives.length)}개` : '', s.days ? `일지 ${num(s.days)}개` : ''].filter(Boolean).join('와 ');
+  const parts = [
+    s.archives.length ? `보관본 ${num(s.archives.length)}개` : '',
+    s.days ? `일지 ${num(s.days)}개` : '',
+    s.summaries.length ? SUMMARY_REDACT_TEXT.files(s.summaries.length) : '',
+  ].filter(Boolean);
+  // 둘이면 "A와 B", 셋이면 "A, B와 C"예요.
+  const what = parts.length <= 2 ? parts.join('와 ') : `${parts.slice(0, -1).join(', ')}와 ${parts[parts.length - 1]}`;
   return `${what}를 다시 쓸까요? [y/N] `;
 }
 
@@ -332,8 +374,15 @@ export function renderRedactResult(r: CommitResult, plan: RedactPlan, p: Painter
   const s = split(r.files);
   const dirs = dataPaths(plan.dataDir);
   const L: string[] = [''];
-  L.push(row(p, '다시 씀', `보관본 ${num(s.archives.length)}개 · 일지 ${num(s.days)}개`));
-  L.push(row(p, '새로 가림', `모두 ${num(totalCount(r.totals))}개 (보관본 ${num(s.archiveTotal)} · 일지 ${num(s.worklogTotal)})`));
+  const sm = s.summaries.length > 0;
+  L.push(row(p, '다시 씀', `보관본 ${num(s.archives.length)}개 · 일지 ${num(s.days)}개${sm ? ` · ${SUMMARY_REDACT_TEXT.files(s.summaries.length)}` : ''}`));
+  L.push(
+    row(
+      p,
+      '새로 가림',
+      `모두 ${num(totalCount(r.totals))}개 (보관본 ${num(s.archiveTotal)} · 일지 ${num(s.worklogTotal)}${sm ? ` · ${SUMMARY_REDACT_TEXT.part(s.summaryTotal)}` : ''})`,
+    ),
+  );
   L.push(row(p, '옛 내용', '남기지 않았어요 (임시·백업 파일 없음)'));
   L.push('');
   if (clearedStaged !== undefined) {
@@ -342,6 +391,7 @@ export function renderRedactResult(r: CommitResult, plan: RedactPlan, p: Painter
   }
   // 화면은 데이터 폴더를 읽기만 해서 다시 열 필요가 없으니 화면 줄은 찍지 않아요.
   L.push(row(p, '결과', '보관 폴더'), `${SUB}${dirs.archiveDir}`, `${' '.repeat(LABEL_W)}일지 폴더`, `${SUB}${dirs.worklogsDir}`);
+  if (sm) L.push(`${' '.repeat(LABEL_W)}${SUMMARY_REDACT_TEXT.dir}`, `${SUB}${dirs.summariesDir}`);
   L.push(checkLine(p));
   return `${L.join('\n')}\n`;
 }

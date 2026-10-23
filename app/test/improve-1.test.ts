@@ -662,7 +662,8 @@ test('I-11: 화면에 "보관본만 남음" 배지가 보일 때만 풀이 줄�
 // ---- I-07·I-08·I-11 README ----
 
 test('I-07·I-08·I-11: README 한국어·영어 모두 맨 위 가까이 빠른 시작이 있고, 지금 되는 설치(소스 빌드 → npm link)가 npm 배포 뒤 설치보다 먼저이며, 용어 풀이가 있고, 드문 경우 설명은 명령 표 뒤 절로 모였어요', () => {
-  const readme = readFileSync(join(APP_DIR, 'README.md'), 'utf8');
+  // 줄 끝이 CRLF로 바뀐 사본(Windows git 체크아웃 등)에서도 같게 읽어요.
+  const readme = readFileSync(join(APP_DIR, 'README.md'), 'utf8').replace(/\r\n/g, '\n');
   const [ko, en] = readme.split(/^## English$/m) as [string, string];
   assert.ok(en, 'English 절이 있어요');
   const check = (part: string, h: { quick: string; install: string; commands: string; rare: string; glossary: string }, terms: string[]) => {

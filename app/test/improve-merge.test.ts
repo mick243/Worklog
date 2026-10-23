@@ -423,7 +423,7 @@ test('I-12: S1 오류 화면(일지 폴더를 읽지 못함)과 화면용 명령
 
 // ---- 개선 취합 4회차: I-32 --help 전체 ----
 
-/** DESIGN 3장 "도움말 출력"의 50줄 글자 그대로 (`--port` 기본값 자리는 DEFAULT_PORT 4848) */
+/** DESIGN 3장 "도움말 출력" 글자 그대로 (`--port` 기본값 자리는 DEFAULT_PORT 4848). AI 요약 회차(PRD A28, DESIGN 2026-10-22)에 --summary 세 줄과 설정 파일 예 둘째 줄을 더해 54줄이에요. */
 const HELP_DESIGN = `cc-worklog — Claude Code 세션과 git log로 비밀 값을 가린 날짜별 일지를 만들어요
 
 사용법
@@ -449,6 +449,9 @@ const HELP_DESIGN = `cc-worklog — Claude Code 세션과 git log로 비밀 값�
   --day-start <시>       하루가 바뀌는 시각 0~23 (기본: 3, 새벽 3시)
   --hide-identity        일지에서 경로 속 사용자 이름과 이메일 주소도 가려요
                          (보관본에는 쓰지 않아요)
+  --summary              일지에 세션마다 AI가 쓴 작업 내용 한 줄을 더해요
+                         (가린 대화 글을 Claude Code로 Anthropic에 보내요)
+                         Claude Code 사용량을 써요 (실행마다 claude 50번까지)
   --claude-dir <폴더>    Claude Code 폴더
                          (기본: CLAUDE_CONFIG_DIR 또는 ~/.claude)
   --data-dir <폴더>      cc-worklog 데이터 폴더
@@ -460,7 +463,8 @@ const HELP_DESIGN = `cc-worklog — Claude Code 세션과 git log로 비밀 값�
   -v, --version          버전
 
 설정 파일   <데이터 폴더>/config.json
-  예) { "roots": ["C:/work"], "dayStartHour": 3, "hideIdentity": false }
+  예) { "roots": ["C:/work"], "dayStartHour": 3, "hideIdentity": false,
+        "summary": false }
 사용자 패턴 <데이터 폴더>/patterns.json
   예) [{ "name": "사내 토큰", "pattern": "CORP-[0-9]{8}",
          "samples": ["CORP-12345678"] }]

@@ -282,7 +282,9 @@ const HELP_CHANGED: string[][] = [
   ['  --claude-dir <폴더>    Claude Code 폴더', '                         (기본: CLAUDE_CONFIG_DIR 또는 ~/.claude)'],
   ['  --data-dir <폴더>      cc-worklog 데이터 폴더', '                         (기본: CC_WORKLOG_HOME 또는 ~/.cc-worklog)'],
   ['  -y, --yes              redact 명령에서 확인을 묻지 않고 바로 다시 써요', '                         (되돌릴 수 없어요)'],
-  ['설정 파일   <데이터 폴더>/config.json', '  예) { "roots": ["C:/work"], "dayStartHour": 3, "hideIdentity": false }'],
+  // AI 요약 회차(DESIGN 2026-10-22): 설정 파일 예에 "summary": false를 더해 쉼표 뒤에서 끊었어요(첫 키 자리 9칸째).
+  ['설정 파일   <데이터 폴더>/config.json', '  예) { "roots": ["C:/work"], "dayStartHour": 3, "hideIdentity": false,', '        "summary": false }'],
+  ['  --summary              일지에 세션마다 AI가 쓴 작업 내용 한 줄을 더해요', '                         (가린 대화 글을 Claude Code로 Anthropic에 보내요)', '                         Claude Code 사용량을 써요 (실행마다 claude 50번까지)'],
   ['사용자 패턴 <데이터 폴더>/patterns.json', '  예) [{ "name": "사내 토큰", "pattern": "CORP-[0-9]{8}",', '         "samples": ["CORP-12345678"] }]'],
 ];
 
@@ -293,7 +295,8 @@ test('I-32: --help(-h)의 모든 줄이 80칸(표시 폭) 안이고, 넘던 11�
       const r = runCli(sb, [flag]);
       assert.equal(r.code, 0, r.stderr);
       const L = lines(r.stdout);
-      assert.equal(L.length, 50, 'DESIGN의 50줄이에요');
+      // AI 요약 회차(PRD A28, DESIGN 2026-10-22)에 --summary 세 줄과 설정 파일 예 둘째 줄을 더해 54줄이에요(80칸 안, 가장 긴 줄은 그대로 79칸).
+      assert.equal(L.length, 54, 'DESIGN의 54줄이에요');
       const over = L.filter((l) => displayWidth(l) > 80);
       assert.deepEqual(over, [], `80칸을 넘는 줄: ${over.join(' / ')}`);
       assert.equal(Math.max(...L.map(displayWidth)), 79, '가장 긴 줄은 79칸이에요');
@@ -309,7 +312,7 @@ test('I-32: --help(-h)의 모든 줄이 80칸(표시 폭) 안이고, 넘던 11�
         for (let j = i + 1; j < L.length && /^ +\S/.test(L[j]!); j++) body.push(L[j]!.trim());
         return JSON.parse(body.join(' ').replace(/^예\) /, '')) as unknown;
       };
-      assert.deepEqual(example('설정 파일'), { roots: ['C:/work'], dayStartHour: 3, hideIdentity: false });
+      assert.deepEqual(example('설정 파일'), { roots: ['C:/work'], dayStartHour: 3, hideIdentity: false, summary: false });
       assert.deepEqual(example('사용자 패턴'), [{ name: '사내 토큰', pattern: 'CORP-[0-9]{8}', samples: ['CORP-12345678'] }]);
     }
   } finally {

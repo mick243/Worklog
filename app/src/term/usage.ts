@@ -29,8 +29,10 @@ export const usageText = {
   /** --from이 --to보다 늦음 (뒤집힌 기간) */
   reversedRange: '--from 날짜가 --to 날짜보다 늦어요',
 
-  // 그 명령에서 받지 않거나 함께 쓸 수 없는 옵션 (A16·A18)
+  // 그 명령에서 받지 않거나 함께 쓸 수 없는 옵션 (A16·A18·A24)
   yesOnlyRedact: '--yes는 redact 명령에서만 써요',
+  /** --summary를 일지 만들기가 아닌 명령에 줌 (A24). 보관만 하고 요약했다고 오해하지 않게 멈춰요. */
+  summaryOnlyMake: '--summary는 일지 만들기(cc-worklog, cc-worklog make)에서만 써요',
   rangeOnlyMake: '--from·--to는 일지 만들기(cc-worklog, cc-worklog make)에서만 써요',
   dateWithRange: '--date와 --from·--to는 함께 쓸 수 없어요',
   toWithoutFrom: '--to는 --from과 함께 써야 해요',

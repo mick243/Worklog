@@ -17,6 +17,8 @@ export interface CliOptions {
   roots?: string[];
   dayStart?: number;
   hideIdentity?: boolean;
+  /** --summary (일지 만들기에서만 줘요, A24) */
+  summary?: boolean;
 }
 
 /** --root와 config.json의 roots에 준 경로가 어디서 왔는지 (잘못된 경로 [알림]에 써요, F1-20) */
@@ -32,6 +34,13 @@ export interface Config {
   rootDepth: number;
   dayStartHour: number;
   hideIdentity: boolean;
+  /**
+   * AI 요약 한 줄 (A24, Q27): --summary 또는 config.json의 "summary": true. 기본은 꺼짐이에요.
+   * 일지 만들기에서만 쓰여요(다른 명령은 이 값을 보지 않아요). 켜 둔 설정을 한 번만 끄는 옵션은 없어요(hideIdentity와 같아요).
+   */
+  summary: boolean;
+  /** 이번 실행에 --summary로 켰는지 (config.json으로 켰으면 false). 이번 명령을 다시 보여 줄 때 --summary를 붙일지 정해요. */
+  summaryFromCli?: boolean;
   cleanupPeriodDays: number;
   /** cleanupPeriodDays를 Claude Code 설정에서 읽었는지 */
   cleanupFromSettings: boolean;
@@ -48,6 +57,7 @@ export interface FileConfig {
   rootDepth?: number;
   dayStartHour?: number;
   hideIdentity?: boolean;
+  summary?: boolean;
 }
 
 export class ConfigError extends Error {}
@@ -60,6 +70,8 @@ export function dataPaths(dataDir: string) {
     archiveProjectsDir: join(dataDir, 'archive', 'projects'),
     indexFile: join(dataDir, 'archive', 'index.json'),
     worklogsDir: join(dataDir, 'worklogs'),
+    /** 요약 저장 파일 (날짜마다 하나, A27). 요약을 켰을 때만 생겨요. */
+    summariesDir: join(dataDir, 'summaries'),
   };
 }
 
@@ -124,6 +136,8 @@ export function resolveConfig(cli: CliOptions): Config {
     rootDepth,
     dayStartHour,
     hideIdentity: cli.hideIdentity ?? file.hideIdentity === true,
+    summary: cli.summary ?? file.summary === true,
+    summaryFromCli: cli.summary === true,
     cleanupPeriodDays: fromSettings ?? DEFAULT_CLEANUP_DAYS,
     cleanupFromSettings: fromSettings !== null,
     dataDirFromCli: Boolean(cli.dataDir),

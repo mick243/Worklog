@@ -1,7 +1,7 @@
 // 명령줄 읽기 (A22). Node parseArgs를 엄격하지 않은 모드(tokens)로 돌린 뒤 이 도구가 직접 검사해서, 오류를 종류별 한국어 문구로 보여 줘요.
 // 엄격 모드가 던지는 영어 원문(Unknown option '--from'. To specify …)은 쓰지 않아요. 검사하는 것은 엄격 모드와 같아요:
 // 모르는 옵션, 값이 필요한 옵션에 값이 없거나 다음 인자가 -로 시작함(값을 -로 시작하게 주려면 --옵션=값), 값을 받지 않는 옵션에 값.
-// 그다음 명령·남는 인자, 그 명령에서 받지 않거나 함께 쓸 수 없는 옵션(--yes, --from·--to, A16·A18), 잘못된 값 순서로 봐요.
+// 그다음 명령·남는 인자, 그 명령에서 받지 않거나 함께 쓸 수 없는 옵션(--yes, --summary, --from·--to, A16·A24·A18), 잘못된 값 순서로 봐요.
 import { parseArgs } from 'node:util';
 import { looksLikeCommandWord, usageText } from './term/usage.js';
 import { dayKeyOf, isDateKey, shiftDate } from './util/time.js';
@@ -16,6 +16,7 @@ export const OPTIONS = {
   root: { type: 'string', multiple: true },
   'day-start': { type: 'string' },
   'hide-identity': { type: 'boolean' },
+  summary: { type: 'boolean' },
   'claude-dir': { type: 'string' },
   'data-dir': { type: 'string' },
   port: { type: 'string' },
@@ -39,6 +40,8 @@ export interface ParsedArgs {
   roots?: string[];
   dayStart?: string;
   hideIdentity: boolean;
+  /** --summary: 세션마다 AI 요약 한 줄 (일지 만들기에서만, A24) */
+  summary: boolean;
   claudeDir?: string;
   dataDir?: string;
   port?: string;
@@ -89,6 +92,7 @@ export function parseCommandLine(argv: string[]): ParsedArgs {
     roots: values.root as string[] | undefined,
     dayStart: values['day-start'] as string | undefined,
     hideIdentity: values['hide-identity'] === true,
+    summary: values.summary === true,
     claudeDir: values['claude-dir'] as string | undefined,
     dataDir: values['data-dir'] as string | undefined,
     port: values.port as string | undefined,
@@ -104,6 +108,8 @@ export function parseCommandLine(argv: string[]): ParsedArgs {
   parsed.command = command as CommandName;
 
   if (parsed.yes && command !== 'redact') throw new UsageError(usageText.yesOnlyRedact);
+  // --summary는 일지 만들기에서만 받아요. 보관만 하고 요약했다고 오해하지 않게요(A24·A22).
+  if (parsed.summary && command !== 'make') throw new UsageError(usageText.summaryOnlyMake);
   if ((parsed.from !== undefined || parsed.to !== undefined) && command !== 'make') throw new UsageError(usageText.rangeOnlyMake);
   if (parsed.date !== undefined && (parsed.from !== undefined || parsed.to !== undefined)) throw new UsageError(usageText.dateWithRange);
   if (parsed.to !== undefined && parsed.from === undefined) throw new UsageError(usageText.toWithoutFrom);

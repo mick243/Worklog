@@ -16,6 +16,8 @@ export interface RemakeDay {
   date: string;
   /** 그 일지를 이름·이메일 가리기를 켜고 만들었는지 */
   hideIdentity: boolean;
+  /** 그 일지를 요약을 켜고 만들었는지 (A28: 빼면 요약 줄이 빠진 일지로 바뀌어서 --summary를 붙여요). 없으면 꺼짐이에요. */
+  summary?: boolean;
   /** 그 일지의 하루 경계 (시) */
   dayStartHour: number;
 }
@@ -45,11 +47,12 @@ export function remakeContext(cfg: Config): RemakeContext {
 }
 
 /** 화면용 일지 데이터에서 다시 만드는 명령에 넣을 설정을 꺼내요. 칸이 없는 옛 모양이면 꺼짐·기본 하루 경계로 봐요. */
-export function remakeDayOf(date: string, day: Partial<Pick<DayLog, 'hideIdentity' | 'dayStartHour'>>): RemakeDay {
+export function remakeDayOf(date: string, day: Partial<Pick<DayLog, 'hideIdentity' | 'dayStartHour' | 'summaryEnabled'>>): RemakeDay {
   const h = day.dayStartHour;
   return {
     date,
     hideIdentity: day.hideIdentity === true,
+    summary: day.summaryEnabled === true,
     dayStartHour: typeof h === 'number' && Number.isInteger(h) && h >= 0 && h <= 23 ? h : DEFAULT_DAY_START,
   };
 }
@@ -77,12 +80,14 @@ export function shellPath(path: string): string {
  * 그 날짜 일지를 만든 설정과 같게 다시 만드는 명령 (S3·S4 안내, PRD S3·S4·A16, Q22·Q23).
  * 검사(S4)의 남은 이름·이메일 안내도 이 명령을 써요. 그때 부르는 쪽이 hideIdentity를 true로 넘겨요(취합 15회차 차이 1).
  *  - 그 일지를 이름·이메일 가리기를 켜고 만들었으면 --hide-identity
+ *  - 그 일지를 요약을 켜고 만들었으면 --summary (A28. 저장해 둔 요약을 다시 쓰므로 대개 새로 부르지 않아요)
  *  - 그 일지의 하루 경계가 기본(3)이나 지금 설정과 다르면 --day-start N (둘 다 같으면 붙이지 않아요)
  *  - 이번 실행에 --data-dir·--claude-dir를 줬으면 그 폴더 (늘 큰따옴표)
  */
 export function remakeCommand(day: RemakeDay, ctx: RemakeContext): string {
   const parts = ['cc-worklog', '--date', day.date];
   if (day.hideIdentity) parts.push('--hide-identity');
+  if (day.summary) parts.push('--summary');
   if (day.dayStartHour !== DEFAULT_DAY_START || day.dayStartHour !== ctx.dayStartHour) parts.push('--day-start', String(day.dayStartHour));
   if (ctx.dataDir) parts.push('--data-dir', shellPath(ctx.dataDir));
   if (ctx.claudeDir) parts.push('--claude-dir', shellPath(ctx.claudeDir));
@@ -92,14 +97,16 @@ export function remakeCommand(day: RemakeDay, ctx: RemakeContext): string {
 /**
  * 이번 일지 만들기를 이름·이메일 가리기를 켜고 다시 하는 명령 (S3 [알림], PRD A21). `--date`·`--from`으로 켜져 있던 일지를 끈 채
  * 다시 만들었을 때 보여 줘요. 이번 실행의 날짜 옵션과 설정을 그대로 두고 --hide-identity만 더해요:
- * 날짜 옵션(--date 또는 --from·--to) → --hide-identity → 하루 경계가 기본(3)과 다르면 --day-start N → 옵션으로 준 --root 폴더들 →
+ * 날짜 옵션(--date 또는 --from·--to) → --hide-identity → (이번 실행에 --summary를 줬으면) --summary → 하루 경계가 기본(3)과 다르면 --day-start N → 옵션으로 준 --root 폴더들 →
  * 옵션으로 준 --data-dir·--claude-dir. 폴더는 늘 큰따옴표예요(shellPath, DESIGN 공통 터미널 규칙).
  */
 export function rerunHideCommand(
   dateArgs: string[],
-  ctx: RemakeContext & { cliRoots?: string[] },
+  ctx: RemakeContext & { cliRoots?: string[]; summary?: boolean },
 ): string {
   const parts = ['cc-worklog', ...dateArgs, '--hide-identity'];
+  // 이번 실행에 --summary로 요약을 켰으면 같은 명령이 되게 붙여요(config.json으로 켰으면 그 파일이 다시 켜요).
+  if (ctx.summary) parts.push('--summary');
   if (ctx.dayStartHour !== DEFAULT_DAY_START) parts.push('--day-start', String(ctx.dayStartHour));
   for (const r of ctx.cliRoots ?? []) parts.push('--root', shellPath(r));
   if (ctx.dataDir) parts.push('--data-dir', shellPath(ctx.dataDir));
