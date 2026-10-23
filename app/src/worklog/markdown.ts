@@ -69,6 +69,23 @@ function countsText(c: Record<string, number>): string {
     .join(' · ');
 }
 
+/**
+ * AI 요약 한 줄의 마크다운 문구 (PRD A24, DESIGN 3장 "일지 마크다운 — AI 요약 줄" 글자 그대로, S2와 같은 뜻). 문구를 바꿀 때는 여기만 바꾸면 돼요.
+ * 요약을 끈 일지에는 머리 줄도 세션 줄도 없어서 기본 일지 모양은 한 글자도 바뀌지 않아요.
+ */
+export const SUMMARY_MD = {
+  /** 머리 줄 (이름·이메일 줄 바로 다음, git 없음 줄보다 위): 요약을 켰다는 것과 요약한 세션 수(전체 세션 중). 세션이 0개면 `(요약할 세션 없음)` */
+  head: (summarized: number, sessions: number) =>
+    sessions === 0 ? '- AI 요약: 켜짐 (요약할 세션 없음)' : `- AI 요약: 켜짐 (세션 ${num(sessions)}개 중 ${num(summarized)}개 요약)`,
+  /** 세션 항목 안 한 줄의 이름표 (AI가 쓴 글이라는 표시). 요약 글은 요청 글처럼 글자 그대로예요. */
+  label: '작업 내용(AI 요약)',
+} as const;
+
+/** 요약을 켠 일지에서 요약 글이 들어간 세션 수 */
+export function summarizedCount(day: Pick<DayLog, 'projects'>): number {
+  return day.projects.reduce((n, p) => n + p.sessions.filter((s) => typeof s.summary === 'string' && s.summary).length, 0);
+}
+
 function sessionItem(s: SessionLog, date: string, noRepo: boolean): string[] {
   const out: string[] = [];
   const t0 = clockLabel(Date.parse(s.start), date);
@@ -84,6 +101,8 @@ function sessionItem(s: SessionLog, date: string, noRepo: boolean): string[] {
   ].filter(Boolean);
   out.push(`  - ${facts.join(' · ')}`);
   if (noRepo && s.cwd) out.push(`  - 작업 폴더: ${mdCode(s.cwd)}`);
+  // 요약하지 못한 세션은 줄을 비워 둬요(빈 줄이나 "요약 없음"을 넣지 않아요, A24).
+  if (typeof s.summary === 'string' && s.summary) out.push(`  - ${SUMMARY_MD.label}: ${mdEscape(s.summary)}`);
   if (s.firstRequest && s.firstRequest === s.lastRequest) out.push(`  - 요청: ${mdEscape(s.firstRequest)}`);
   else {
     if (s.firstRequest) out.push(`  - 첫 요청: ${mdEscape(s.firstRequest)}`);
@@ -144,6 +163,7 @@ export function renderMarkdown(day: DayLog): string {
   } else {
     L.push('- 이름·이메일 가리기: 꺼짐');
   }
+  if (day.summaryEnabled === true) L.push(SUMMARY_MD.head(summarizedCount(day), day.totals.sessions));
   if (!day.gitAvailable) L.push('- git을 찾지 못해 커밋 없이 세션만 담았어요.');
   L.push(renderProjects(day), '');
   return L.join('\n');

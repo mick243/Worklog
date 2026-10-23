@@ -21,6 +21,13 @@ const ERROR_CODE = /^E[A-Z0-9]+$/;
 export const UNREADABLE_NEXT = '읽지 못한 파일을 연 프로그램(편집기·화면·백신 등)을 닫거나 파일 권한을 확인한 뒤 다시 검사하세요.';
 
 /**
+ * 열리지만 깨진 요약 저장 파일(JSON이 아니거나 요약 저장 파일 모양이 아님)의 표시 (PRD S4·A27, 취합 20회차 차이 7).
+ * 읽지 못한 파일 한 건으로 세고, 원인 코드 자리에 이 글을 둬요: `summaries/2026-10-19.json  읽지 못함 (깨진 파일)`.
+ * 일지 만들기 S3 [알림]의 `(깨진 파일)`과 같은 말이에요.
+ */
+export const SUMMARY_BROKEN = '깨진 파일';
+
+/**
  * 이름·이메일 옵션이 켜진 일지에 사용자 이름·이메일이 남았을 때의 다음: 줄. 그 아래 날짜마다 다시 만드는 명령(--hide-identity 늘 붙음)과
  * 안내 한 줄이 와요(PRD S4, 취합 15회차 차이 1). 문구는 DESIGN S4 11번과 같아요(80칸에서 `일지를` 다음에 끊겨요, 취합 17회차 확인).
  */
@@ -52,6 +59,25 @@ export const IDENTITY_TEXT = {
   },
 } as const;
 
+/**
+ * AI 요약 한 줄 (A27)의 검사 문구 (DESIGN S4 5·7·12번 글자 그대로). 요약 저장 파일이 있거나 요약을 켜고 만든 일지가 있을 때만 나와요.
+ * 요약 저장 파일은 `남은 의심`에만 들어요(가린 자리 칸·이름·이메일 칸에는 넣지 않아요, 보관본처럼 이름·이메일 가리기를 쓰지 않는 재료).
+ * 문구를 바꿀 때는 여기만 바꾸면 돼요.
+ */
+export const SUMMARY_CHECK_TEXT = {
+  /** 5번 2. 결과물 재검사 머리 줄 끝 */
+  scanned: (n: number) => `요약 저장 파일 ${num(n)}개`,
+  /** 7번 참고: 요약을 켰으면 첫 줄 바로 다음 줄(6칸)에 더해요(80칸) */
+  mayMiss: '규칙이 놓친 값을 AI 요약이 다른 모양으로 바꿔 쓴 것도 찾지 못할 수 있어요.',
+  /** 12번 끈 일지 [알림]: 요약을 켜고 만든 끈 일지가 있으면 명령 줄 아래(7칸) */
+  offSummary: '요약을 켜고 만든 일지면 --summary도 붙이세요.',
+  /**
+   * 깨진 요약 저장 파일이 있을 때의 다음: 줄 (PRD S4·A27, DESIGN S4 11번 정리 회차, 취합 20회차 차이 7). 다시 가리기로 고쳐지지 않아서
+   * 다시 가리기를 권하지 않아요. 읽지 못한 파일 다음: 바로 다음(없으면 맨 앞)이에요. 80칸에서 `그대로이고,` 다음에 끊겨요.
+   */
+  brokenNext: '깨진 요약 저장 파일을 지운 뒤 다시 검사하세요. 지워도 일지는 그대로이고, 요약을 켜고 그 날짜를 다시 만들면 요약을 다시 불러요.',
+} as const;
+
 /** 1. 패턴 시험의 머리 줄 합계와 잡힌 패턴 목록 앞말 (DESIGN S4 3번, I-10). 앞말 폭(9칸)이 이어지는 줄의 들여쓰기예요. */
 export const PATTERN_TEXT = {
   head: (total: number, caught: number, missed: number) => `내장 가짜 값 ${num(total)}개 — 잡힘 ${num(caught)} · 놓침 ${num(missed)}`,
@@ -66,8 +92,11 @@ export interface CheckReport {
   builtin: Array<{ label: string; caught: boolean }>;
   negatives: Array<{ what: string; intact: boolean }>;
   user: Array<{ name: string; samples: number; caught: number }>;
-  scanned: { worklogs: number; archives: number };
+  /** summaries: 요약 저장 파일 수 (AI 요약, A27). 없거나 0이면 출력에 넣지 않아요(요약을 켠 적이 없으면 지금 모양 그대로). */
+  scanned: { worklogs: number; archives: number; summaries?: number };
   markers: { worklog: Counts; archive: Counts };
+  /** 요약을 켜고 만든 일지나 요약 저장 파일이 있는지 (S4 "놓칠 수 있는 것" 줄에 AI 요약을 더해요, A27) */
+  summaryUsed?: boolean;
   /**
    * 남은 의심: 파일(데이터 폴더 기준) → 줄 번호(0이면 줄 번호 없음) → 종류.
    * code가 있으면 검사가 읽지 못한 파일·폴더예요(kind는 UNREADABLE, code는 EBUSY 같은 원인 코드).
@@ -82,7 +111,7 @@ export interface CheckReport {
    * 이름·이메일 가리기를 끈 일지(날짜 수)와 거기 남은 사용자 이름·이메일 수 (값·위치 없이, A19). 세는 단위는 켠 일지와 같아요(PRD A23).
    * 판정에는 넣지 않아요. 없으면(옛 호출) 세지 않은 것으로 봐요.
    */
-  identityOff?: { worklogs: number; userNames: number; emails: number };
+  identityOff?: { worklogs: number; userNames: number; emails: number; summaryWorklogs?: number };
   passed: boolean;
   /**
    * 멈춘 보관본 다시 가리기 (A16): unfinished = 파일을 바꾸기 시작한 뒤 멈춰 다시 쓰기 기록이 남음, broken = 기록이 깨져 읽을 수 없음.
@@ -125,7 +154,9 @@ function groupFindings(f: CheckReport['findings']): string[] {
     // 검사가 그 파일에서 앞서 찾은 의심은 세지 않고 읽지 못함 1건만 남겨서(commands/check.ts의 collectFile) 수와 목록이 맞아요
     // (DESIGN S4 5번 "세는 법", PRD S4, 취합 17회차). 원인 코드를 알 수 없으면 괄호를 빼요. "모양"은 붙이지 않아요(값의 모양을 본 것이 아니라서예요).
     if (g.unreadable !== undefined) {
-      out.push(`     ${padW(file, fileW)}  ${ERROR_CODE.test(g.unreadable) ? `${UNREADABLE} (${g.unreadable})` : UNREADABLE}`);
+      // 깨진 요약 저장 파일은 원인 코드 대신 `(깨진 파일)`이에요(PRD S4·A27).
+      const why = ERROR_CODE.test(g.unreadable) || g.unreadable === SUMMARY_BROKEN ? `${UNREADABLE} (${g.unreadable})` : UNREADABLE;
+      out.push(`     ${padW(file, fileW)}  ${why}`);
       continue;
     }
     const lines = g.lines.length ? `줄 ${g.lines.slice(0, 10).join(', ')}${g.lines.length > 10 ? ' 외' : ''}` : '줄 번호 없음';
@@ -171,8 +202,9 @@ export function renderCheckReport(r: CheckReport, stream: NodeJS.WriteStream = p
   }
   L.push('');
 
-  L.push(`${p.bold('2. 결과물 재검사')}  일지 ${num(r.scanned.worklogs)}개 · 보관본 ${num(r.scanned.archives)}개`);
-  if (r.scanned.worklogs + r.scanned.archives === 0) {
+  const summaries = r.scanned.summaries ?? 0;
+  L.push(`${p.bold('2. 결과물 재검사')}  일지 ${num(r.scanned.worklogs)}개 · 보관본 ${num(r.scanned.archives)}개${summaries > 0 ? ` · ${SUMMARY_CHECK_TEXT.scanned(summaries)}` : ''}`);
+  if (r.scanned.worklogs + r.scanned.archives + summaries === 0) {
     L.push('   검사할 일지와 보관본이 없어요 — 패턴 시험만 했어요');
   } else {
     // 네 칸의 값은 모두 같은 자리(가장 긴 칸 이름 "이름·이메일 (일지만)" 뒤 두 칸, 25칸째)에서 시작해요.
@@ -208,7 +240,9 @@ export function renderCheckReport(r: CheckReport, stream: NodeJS.WriteStream = p
     }
   }
   L.push('');
+  // 놓칠 수 있는 것 한 줄. 요약을 켰다면 AI가 규칙이 놓친 값을 다른 모양으로 바꿔 쓴 것도 더해요(A27). 80칸을 넘으면 낱말 사이에서 끊어요.
   L.push('참고: 형식 없는 비밀(문장 속 비밀번호 등)과 문장 속 이름은 찾지 못할 수 있어요.');
+  if (r.summaryUsed) L.push(`      ${SUMMARY_CHECK_TEXT.mayMiss}`);
   L.push('');
   // 멈춘 다시 가리기: 판정 바로 위에 [알림] 한 덩어리 (80칸을 넘으면 이름표 뒤 위치로 넘겨요).
   // 판정과 함께 읽히는 자리라 "판정은 지금 파일 기준"과 다시 검사하라는 말을 더한 검사 전용 문장이에요(DESIGN S4 9번).
@@ -248,10 +282,13 @@ export function renderCheckReport(r: CheckReport, stream: NodeJS.WriteStream = p
     const identityDates = new Set(identityDays.map((d) => d.date));
     const overlapDates = identityDays.filter((d) => mismatchedDates.has(d.date)).map((d) => d.date);
     const identityOnly = identityDays.filter((d) => !mismatchedDates.has(d.date));
-    const unreadable = r.findings.some((f) => f.code);
+    // 읽지 못한 파일 중 깨진 요약 저장 파일은 프로그램을 닫거나 권한을 고쳐도 풀리지 않아서 다음: 줄을 따로 둬요(PRD S4·A27, 취합 20회차 차이 7).
+    const unreadable = r.findings.some((f) => f.code && f.code !== SUMMARY_BROKEN);
+    const brokenSummary = r.findings.some((f) => f.code === SUMMARY_BROKEN);
     const suspects = r.findings.some((f) => !f.code);
     const steps: Array<{ text: string; note?: string; commands?: string[]; after?: string }> = [
       { text: unreadable ? UNREADABLE_NEXT : '' },
+      { text: brokenSummary ? SUMMARY_CHECK_TEXT.brokenNext : '' },
       { text: suspects ? '필요하면 사용자 패턴을 더한 뒤 cc-worklog redact를 실행하고 다시 검사하세요.' : '' },
       {
         text:
@@ -288,6 +325,8 @@ export function renderCheckReport(r: CheckReport, stream: NodeJS.WriteStream = p
     L.push('');
     L.push(...wrapText(IDENTITY_TEXT.offNotice(off.worklogs, off.userNames, off.emails), `${p.bold('[알림]')} `, ' '.repeat(7)));
     L.push(`${' '.repeat(9)}${IDENTITY_TEXT.offCommand(r.remake ?? { dayStartHour: DEFAULT_DAY_START })}`);
+    // 명령 모양은 날짜 자리를 바꿔 넣는 한 줄이라 일지마다 다른 --summary를 붙일 수 없어서 글로 알려요(DESIGN S4 12번, PRD A28).
+    if ((off.summaryWorklogs ?? 0) > 0) L.push(`${' '.repeat(7)}${SUMMARY_CHECK_TEXT.offSummary}`);
     L.push(...wrapText(REMAKE_HINT, ' '.repeat(7), ' '.repeat(7)));
   }
   return `${L.join('\n')}\n`;

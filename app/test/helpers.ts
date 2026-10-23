@@ -10,6 +10,12 @@ import { fileURLToPath } from 'node:url';
 export const APP_DIR = fileURLToPath(new URL('../../', import.meta.url));
 export const CLI = join(APP_DIR, 'dist', 'src', 'cli.js');
 export const NO_NET = join(APP_DIR, 'test', 'fixtures', 'no-network.cjs');
+/** 가짜 claude (PRD A26). 실제 Claude Code를 부르지 않아요. */
+export const FAKE_CLAUDE = join(APP_DIR, 'test', 'fixtures', 'fake-claude.mjs');
+
+// 시험이 실수로라도 실제 claude를 부르지 않게, 이 모듈을 부르는 모든 시험(같은 프로세스에서 부르는 runMake 등 포함)에 늘 가짜를 줘요.
+process.env.CC_WORKLOG_CLAUDE = FAKE_CLAUDE;
+for (const k of Object.keys(process.env)) if (k.startsWith('FAKE_CLAUDE_') || k === 'CC_WORKLOG_CLAUDE_TIMEOUT_MS') delete process.env[k];
 
 export interface Sandbox {
   root: string;
@@ -43,6 +49,9 @@ export function sandbox(): Sandbox {
   delete env.CC_WORKLOG_HOME;
   delete env.CC_WORKLOG_GIT;
   delete env.NODE_OPTIONS;
+  // 가짜 claude와 그 호출 기록 폴더 (A26). 요약을 켜지 않으면 이 폴더가 생기지 않아요(claude 실행 0회).
+  env.CC_WORKLOG_CLAUDE = FAKE_CLAUDE;
+  env.FAKE_CLAUDE_LOG_DIR = join(root, 'fake-claude-calls');
   return {
     root,
     home,
@@ -69,6 +78,36 @@ export function runCli(sb: Sandbox, args: string[], extraEnv: NodeJS.ProcessEnv 
     maxBuffer: 64 * 1024 * 1024,
   });
   return { code: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+}
+
+/** 가짜 claude가 남긴 호출 기록 (시작 시각 순서). 한 번도 실행되지 않았으면 빈 목록이에요. */
+export interface FakeCall {
+  argv: string[];
+  cwd: string;
+  pid: number;
+  start: number;
+  end: number | null;
+  stdin: string;
+  mode: string;
+}
+
+export function fakeCalls(sb: Sandbox): FakeCall[] {
+  const dir = sb.env.FAKE_CLAUDE_LOG_DIR!;
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  return names
+    .filter((n) => n.endsWith('.json'))
+    .map((n) => JSON.parse(readFileSync(join(dir, n), 'utf8')) as FakeCall)
+    .sort((a, b) => a.start - b.start || a.pid - b.pid);
+}
+
+/** 가짜 claude 호출 기록을 비워요 (다음 실행의 호출만 보려고). */
+export function clearFakeCalls(sb: Sandbox): void {
+  rmSync(sb.env.FAKE_CLAUDE_LOG_DIR!, { recursive: true, force: true });
 }
 
 // ---- git ----

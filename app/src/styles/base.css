@@ -432,9 +432,14 @@ pre,
 }
 .redacted-help,
 .whole-help,
-.content > .archive-only-help {
+.content > .archive-only-help,
+.summary-help {
   margin: var(--space) 0;
   font-size: var(--font-size-sm);
+}
+/* AI 요약 풀이 줄(요약을 켜고 만든 일지만, 알림 줄 맨 끝): 다른 풀이 줄과 같은 모양이고, 명령이 길어도 가로 스크롤이 생기지 않게 해요. */
+.summary-help code {
+  overflow-wrap: anywhere;
 }
 .toc {
   margin: calc(var(--space) * 2) 0;
@@ -512,12 +517,25 @@ pre,
   font-size: var(--font-size-sm);
 }
 .session__req,
-.session__cwd {
+.session__cwd,
+.session__summary {
   overflow-wrap: anywhere;
 }
 .session__req .label,
-.session__cwd .label {
+.session__cwd .label,
+.session__summary .label {
   margin-right: var(--space);
+}
+/* AI 표시 (작업 내용 줄, DESIGN 6장): 글자 "AI 요약"을 담은 테두리만 있는 무채색 작은 표시예요.
+   가린 자리 칩(보라 점선)과 겹치지 않게 실선·무채색이고, 배경·색·기호는 없어요. 둘로 끊기지 않아요. */
+.ai-mark {
+  padding: 0 calc(var(--space) / 2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-muted);
+  font-size: var(--font-size-sm);
+  font-weight: 400;
+  white-space: nowrap;
 }
 .session__extra .badge {
   margin-left: calc(var(--space) / 2);

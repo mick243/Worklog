@@ -203,6 +203,25 @@ export function userRequestText(o: Json): string | null {
   return text;
 }
 
+/**
+ * 답변 글: assistant 줄의 글(text 블록)만 이어요. 도구 호출 입력(tool_use)·생각 과정·빠진 자리 표시는 넣지 않아요(A25).
+ * 서브 에이전트 대화(사이드체인)는 빼요. 글이 없으면 null이에요.
+ */
+export function assistantReplyText(o: Json): string | null {
+  if (o.type !== 'assistant' || o.isSidechain === true) return null;
+  const content = (o.message as Json | undefined)?.content;
+  let text = '';
+  if (typeof content === 'string') text = content;
+  else if (Array.isArray(content)) {
+    text = (content as Json[])
+      .filter((b) => b && b.type === 'text' && typeof b.text === 'string')
+      .map((b) => b.text as string)
+      .join('\n');
+  }
+  text = text.trim();
+  return text ? text : null;
+}
+
 export interface CostFields {
   linesAdded?: number;
   linesRemoved?: number;

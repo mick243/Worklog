@@ -10,6 +10,7 @@ import { dataPaths, WARN_DAYS, type Config } from '../config.js';
 import { neutralizeDeep } from '../redact/marker.js';
 import { type Counts, type Redactor } from '../redact/redact.js';
 import { classifyLine, compareVersion, CONVERSATION_TYPES, FORMAT_BASELINE, safeTypeName, toArchiveShape, type Json } from '../session/format.js';
+import { WORK_DIR_PROJECT } from '../summary/claude.js';
 import { fileSize, headHash, relPosix, renameWithRetry, walkFiles, writeFileAtomic, writingDataDir } from '../util/fs.js';
 import { parseJsonText } from '../util/json.js';
 import { readLines } from '../util/lines.js';
@@ -157,7 +158,11 @@ export async function runArchive(cfg: Config, redactor: Redactor, opts: ArchiveO
   } catch {
     projectsDirExists = false;
   }
-  const files = projectsDirExists ? walkFiles(cfg.projectsDir, (n) => n.toLowerCase().endsWith('.jsonl')) : [];
+  // 요약 호출용 빈 작업 폴더(summary/claude.ts)의 세션 기록 폴더는 보관하지 않아요. 요약 호출은 --no-session-persistence로
+  // 세션 기록을 남기지 않지만, 남기는 판이 있어도 요약 재료와 지시가 "저장소 없음" 세션으로 보관·일지에 섞이지 않게 하는 안전장치예요(A26 3).
+  const files = projectsDirExists
+    ? walkFiles(cfg.projectsDir, (n) => n.toLowerCase().endsWith('.jsonl')).filter((f) => !WORK_DIR_PROJECT.test(relPosix(cfg.projectsDir, f).split('/')[0] ?? ''))
+    : [];
 
   const result: ArchiveResult = {
     projectsDirExists,

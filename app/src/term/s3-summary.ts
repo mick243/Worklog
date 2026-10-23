@@ -6,8 +6,10 @@ import type { RootIssue } from '../git/repo.js';
 import type { RecoveryResult } from '../redact/journal.js';
 import { sortedCounts, totalCount, type Counts } from '../redact/redact.js';
 import { FORMAT_BASELINE } from '../session/format.js';
+import { FAIL_REASONS, type FailReason } from '../summary/claude.js';
+import type { StoreWriteFailure } from '../summary/run.js';
 import { num } from '../util/text.js';
-import { displayWidth, padW, painter, wrapParts, wrapText } from './format.js';
+import { displayWidth, padW, painter, wrapParts, wrapText, type Painter } from './format.js';
 import { BROKEN_FULL } from './notices.js';
 import { checkLine } from './s3-redact.js';
 
@@ -41,6 +43,169 @@ export interface RunSummary {
   rootDepth?: number;
   /** make일 때만: 만든 날짜와 건너뛴 날짜 (A18·A20·A21) */
   make?: MakeSummary;
+  /** make일 때만: AI 요약 한 줄 (A24·A28). 요약을 끈 실행은 남은 세션·빠진 날짜 안내만 나올 수 있어요. */
+  summary?: SummaryRunInfo;
+}
+
+/** 읽지 못하거나 깨진 요약 저장 파일 하나 (S3 [알림], A27). 파일 내용은 담지 않아요. */
+export interface StoreProblem {
+  /** 절대 경로 */
+  path: string;
+  /** 원인 코드(EBUSY 등). 열었는데 내용을 읽을 수 없으면(깨진 파일) 없어요. */
+  code?: string;
+}
+
+/** S3에 보여 줄 AI 요약 결과 (A24·A27·A28). 출력·오류 원문과 요약 글은 담지 않아요(수만). */
+export interface SummaryRunInfo {
+  /** 이번 실행이 요약을 켰는지 (--summary 또는 config.json의 summary) */
+  on: boolean;
+  /** 요약 대상 세션 수 (이번 실행이 쓴 요약 일지의 세션 중 그날 요청·답변 글이 있는 세션). 요약한 + 못 한 = 대상이에요. */
+  targets: number;
+  /** 새로 불러 받은 요약 수 */
+  newly: number;
+  /** 요약 저장 파일에서 다시 쓴 요약 수 (그날 줄이 늘지 않은 세션) */
+  reused: number;
+  /** 요약하지 못한 세션 수 (까닭별, 0인 까닭은 보여 주지 않아요) */
+  failed: Record<FailReason, number>;
+  /** 50번 상한으로 미룬 세션 수 (못 한 세션의 첫 까닭). 이번에 쓴 일지의 세션만이에요. */
+  deferred: number;
+  /**
+   * 이번 실행이 상한에 닿았는지 (PRD A24 "상한에 닿음", 취합 20회차 차이 2): claude를 50번 실행했고 부를 세션이 더 남았어요.
+   * 남은 세션이 이번에 다시 만들지 않은 요약 일지(A18 ③)에만 있어도 닿은 거예요. 그래서 deferred가 0이어도 true일 수 있어요.
+   * 없으면(옛 호출) deferred > 0으로 봐요.
+   */
+  capReached?: boolean;
+  /** 가린 대화 글을 Claude Code로 보낸 세션 수 (실행한 세션 중 보내기 전에 멈춘 것이 확실한 세션(찾지 못함·로컬 로그인 안 됨)을 뺀 수, A28) */
+  sent: number;
+  /** 이번 실행 뒤에도 요약이 빈 채 남은 세션 수와 그 일지(날짜) 수 (기본 실행이면 다시 만들지 않은 요약 일지 포함) */
+  remaining: { sessions: number; days: number } | null;
+  /** 요약을 켜고 만든 일지를 요약을 끈 채 다시 만들어 요약 줄이 빠진 날짜 (A28 ①, --date·--from) */
+  droppedDays: string[];
+  /** 읽지 못하거나 깨진 요약 저장 파일 (저장한 요약이 없는 것으로 봤어요, A27) */
+  storeProblems: StoreProblem[];
+  /** 받은 요약을 쓰지 못한 요약 저장 파일 (날짜 순서, 파일마다 쓰지 못한 요약 수와 원인 코드). 받은 요약은 일지에 넣었어요(A27). */
+  storeWriteFailed: StoreWriteFailure[];
+  /** 남은 세션 안내를 보여 줄지 (요약을 켠 실행, 또는 요약을 끈 기본 실행, A24·A28 ②) */
+  showRemaining: boolean;
+  /**
+   * 찾지 못함·로그인 안 됨·사용량 제한으로 남은 세션을 부르지 않고 멈췄으면 그 까닭과, 그 까닭으로 부르지 않은 세션 중 이번에 쓰지 않은
+   * 요약 일지(기본 실행이 다시 만들지 않은 A18 ③ 일지)에 있는 수예요(취합 22회차 차이 1). S3 수에 넣는 규칙은 summaryCounts 한 곳이에요.
+   * 없으면(옛 호출·멈추지 않음) 지금처럼 이번에 쓴 일지의 수만 보여 줘요.
+   */
+  halted?: { reason: FailReason; outside: number } | null;
+}
+
+/**
+ * S3 `AI 요약` 칸 1·2줄과 이유별 [알림]에 쓰는 수 (PRD S3·A28, 취합 22회차 차이 1). 수를 세는 규칙을 바꿀 때는 여기만 바꾸면 돼요.
+ * 기본은 이번에 쓴 일지의 요약 대상 세션 수예요(DESIGN S3 가·나 "이 절의 말", 요약한 + 못 한 = 요약 대상).
+ * 찾지 못함·로그인 안 됨·사용량 제한으로 멈췄는데 이번에 쓴 일지의 못 한 세션에 그 까닭이 하나도 없으면(쓴 일지가 없음, 쓴 일지의 요약 대상이 0,
+ * 쓴 일지의 세션은 모두 저장해 둔 요약 등 — claude를 찾지 못하면 한 세션도 꺼내지 않아 ③ 일지를 다시 만들지 않아서 생겨요), 그 까닭으로
+ * 부르지 않은 세션(다시 만들지 않은 ③ 일지의 빈 세션)을 그 까닭의 수로 세고 요약 대상에도 더해요. 그래야 까닭과 할 일([알림])이 빠지지 않고
+ * `요약할 세션이 없었어요`로 보이지 않으며, 요약한 + 못 한 = 요약 대상도 맞아요. 그 세션들은 남은 세션 줄에도 그대로 들어요.
+ * 쓴 일지에 그 까닭이 1개 이상이면 더하지 않아요(로그인 안 됨·사용량 제한의 지금 수, `50번 상한으로 미룸`이 쓴 일지만 세는 규칙과 맞춰요).
+ * (DESIGN 6장 "정리 회차" 끝 "덧붙임 — 멈춘 이유가 쓴 일지 밖에만 있을 때", S3 가·나 6-1 2줄·10번, 2026-10-23)
+ */
+export function summaryCounts(sm: SummaryRunInfo): { targets: number; failed: Record<FailReason, number> } {
+  const failed = { ...sm.failed };
+  let targets = sm.targets;
+  const h = sm.halted;
+  if (h && h.outside > 0 && failed[h.reason] === 0) {
+    failed[h.reason] = h.outside;
+    targets += h.outside;
+  }
+  return { targets, failed };
+}
+
+/** 못 한 세션의 까닭 순서 (DESIGN S3 가·나 6-1 2줄): 50번 상한으로 미룸 → 찾지 못함 → 로그인 안 됨 → 사용량 제한 → 시간 초과 → 그 밖의 실패 */
+export const SUMMARY_REASON_ORDER: ReadonlyArray<FailReason | 'deferred'> = ['deferred', 'not-found', 'auth', 'rate-limit', 'timeout', 'other'];
+
+/**
+ * AI 요약 문구 (PRD A24·A27·A28, DESIGN S3 가·나 6-1·6-2·10번·로딩·오류 글자 그대로). 문구를 바꿀 때는 여기만 바꾸면 돼요.
+ * 위험이 아니라 예상한 동작이라 [경고]를 쓰지 않아요.
+ */
+export const SUMMARY_TEXT = {
+  /** 6-1 칸 이름 (S3 전체가 "실행 요약"이라 `요약`만 쓰면 헷갈려서 `AI 요약`) */
+  label: 'AI 요약',
+  /** 6-1 1줄 (켠 실행): 요약한 세션 = 새로 부름 + 저장해 둔 요약, 괄호 안은 0인 덩어리를 빼요 */
+  onHead: (summarized: number) => `켜짐 — 요약한 세션 ${num(summarized)}개`,
+  onParts: (newly: number, reused: number) => [newly ? `새로 부름 ${num(newly)}개` : '', reused ? `저장해 둔 요약 ${num(reused)}개` : ''].filter(Boolean),
+  /** 6-1 1줄: 요약 대상 세션이 하나도 없음 */
+  noTargets: '켜짐 — 요약할 세션이 없었어요',
+  /** 6-1 2줄: 못 한 세션 (까닭은 SUMMARY_REASON_ORDER 순서, 0인 까닭은 빼요) */
+  failedHead: (total: number) => `(못 한 세션 ${num(total)}개 — `,
+  reason: {
+    deferred: '50번 상한으로 미룸',
+    'not-found': 'claude를 찾지 못함',
+    auth: '로그인 안 됨',
+    'rate-limit': '사용량 제한',
+    timeout: '시간 초과',
+    other: '그 밖의 실패',
+  } as Record<FailReason | 'deferred', string>,
+  /** 6-1 3줄: 남은 세션 (상한에 닿았는지에 따라 두 모양) */
+  remainingCap: (sessions: number, days: number) =>
+    `이번 실행은 claude 50번 상한에 닿아 요약이 빈 세션 ${num(sessions)}개(일지 ${num(days)}개)가 남았어요. 다음에 요약을 켜고 실행하면 최근 날짜부터 이어서 채워요.`,
+  remaining: (sessions: number, days: number) =>
+    `요약이 빈 세션 ${num(sessions)}개(일지 ${num(days)}개)가 남았어요. 다음에 요약을 켜고 실행하면 최근 날짜부터 이어서 채워요.`,
+  /** 6-1 끈 실행 ① (--date·--from): 요약 일지를 요약을 끈 채 다시 만들어 요약 줄이 빠진 날짜 수 */
+  droppedHead: (n: number) => `꺼짐 (요약을 켜고 만들었던 일지 ${num(n)}개는 요약 줄 없이 다시 만들었어요)`,
+  droppedTodo: '(이번 명령에 --summary를 붙여 다시 실행하면 요약이 돌아와요)',
+  /** 6-1 끈 실행 ② (기본 실행): 요약 일지에 요약이 빈 세션이 남음 */
+  remainingOffHead: (days: number, sessions: number) => `꺼짐 (요약을 켜고 만든 일지 ${num(days)}개에 요약이 빈 세션 ${num(sessions)}개가 남았어요)`,
+  remainingOffTodo: '(--summary로 실행하면 최근 날짜부터 이어서 채워요)',
+  /** 6-2 `보냄` 칸 (켠 실행에서 보낸 세션이 1개 이상일 때만, 괄호는 늘 다음 줄) */
+  sentLabel: '보냄',
+  sent: '가린 대화 글을 Claude Code로 Anthropic에 보냈어요',
+  sentNote: (n: number) => `(세션 ${num(n)}개, Claude Code 사용량을 써요)`,
+  /** 10번 [알림] 요약 저장 파일을 읽지 못함: 1줄 · 파일 줄(절대 경로 + 괄호) · 정해진 두 줄 */
+  storeHead: (n: number) => `요약 저장 파일 ${num(n)}개를 읽지 못해 그 날짜는 저장해 둔 요약 없이 만들었어요.`,
+  storeBroken: '깨진 파일',
+  storeTodo: ['다른 프로그램이 잡고 있으면 닫고 다시 실행하세요.', '깨진 파일은 지워도 일지는 그대로예요.'],
+  /** 10번 [알림] AI 요약을 하지 못함 (켠 실행만, 까닭마다 한 덩어리, 50번 상한으로 미룸은 [알림]이 없어요) */
+  todo: {
+    'not-found': (n: number) => `claude를 찾지 못해 세션 ${num(n)}개를 요약하지 못했어요. Claude Code가 설치돼 있고 claude가 PATH에 있는지 확인한 뒤 다시 실행하세요.`,
+    // 서버가 인증을 거절한 세션(401·403)도 이 까닭으로 세고 보낸 세션에 들어서 "거절돼"를 함께 적어요(DESIGN S3 10번 정리 회차, 취합 20회차 차이 3).
+    auth: (n: number) =>
+      `Claude Code에 로그인돼 있지 않거나 로그인이 거절돼 세션 ${num(n)}개를 요약하지 못했어요. 터미널에서 claude를 한 번 실행해 로그인한 뒤 다시 실행하세요.`,
+    'rate-limit': (n: number) => `Claude Code 사용량 제한에 걸려 세션 ${num(n)}개를 요약하지 못했어요. 나중에 요약을 켜고 다시 실행하면 빠진 세션만 다시 불러요.`,
+    timeout: (n: number) => `60초 안에 답이 오지 않아 세션 ${num(n)}개를 요약하지 못했어요. 나중에 요약을 켜고 다시 실행하면 빠진 세션만 다시 불러요.`,
+    // 재료(가린 보관본의 그날 글)를 만들지 못해 claude를 실행하지 않은 세션도 이 까닭이에요(PRD A24·A28, DESIGN S3 10번 정리 회차).
+    other: (n: number) =>
+      `보낼 글을 만들지 못했거나 claude가 요약을 돌려주지 못해 세션 ${num(n)}개를 요약하지 못했어요. 나중에 요약을 켜고 다시 실행하면 빠진 세션만 다시 불러요.`,
+  } as Record<FailReason, (n: number) => string>,
+  /**
+   * 받은 요약을 요약 저장 파일에 쓰지 못함 (PRD S3·A27, DESIGN S3 10번 정리 회차, 취합 20회차 차이 8). 멈추지 않는 [알림]이고 종료 코드는 그대로예요.
+   * 1줄(수는 쓰지 못한 요약 수 = 세션 수) · 파일마다 절대 경로 + 원인 코드 괄호(7칸, 날짜 순서) · 끝 세 줄(7칸, 문장마다 한 줄).
+   * 그 세션은 요약 저장 파일에 없어서 요약을 켜고 그 날짜를 다시 만들 때 다시 불러요. 그날이 끝난 뒤 만든 지난 일지는 일지에 요약이 들어 있어
+   * 기본 실행이 다시 만들지 않아서(A18 ③ 대상이 아님) --date·--from으로 다시 만들 때만이에요.
+   */
+  storeWriteFailed: (n: number) => `받은 요약 ${num(n)}개를 요약 저장 파일에 쓰지 못했어요. 이번 일지에는 넣었어요.`,
+  storeWriteFailedTodo: [
+    '다른 프로그램이 잡고 있으면 닫으세요.',
+    '저장하지 못한 요약은 요약을 켜고 그 날짜를 다시 만들 때 다시 불러요.',
+    '지난 날짜는 --date나 --from으로 다시 만들 때만 다시 불러요.',
+  ],
+  /** 로딩: 진행 표시 `요약하는 중 12/50 세션 (Claude Code)` */
+  progressLabel: '요약하는 중',
+  progressUnit: '세션 (Claude Code)',
+  /**
+   * 요약 중 Ctrl+C ([취소], 표준 오류, 종료 코드 1, PRD S3·A26, DESIGN S3 가·나 오류 정리 회차): 1줄 · 받은 요약이 1개 이상이면 2줄(7칸) · 다음:.
+   * 받은 요약 수는 요약 저장 파일에 저장한 수예요(받았지만 저장하지 못한 요약은 일지도 쓰지 않아 남지 않아서 세지 않아요).
+   */
+  interrupted: 'Ctrl+C를 받아 요약을 멈췄어요. 이번 실행은 일지를 만들지 않았어요.',
+  interruptedKept: (kept: number) => `받은 요약 ${num(kept)}개는 저장해 뒀어요.`,
+  interruptedNext: '요약을 켜고 다시 실행하면 빠진 세션만 이어서 불러 일지를 만들어요.',
+} as const;
+
+/**
+ * 요약 중 Ctrl+C로 멈춘 출력 (표준 오류, 종료 코드 1, PRD S3·A26). 부르던 claude는 끝냈고 일지는 하나도 쓰지 않았어요(한쪽만 바뀐 일지 없음).
+ * 결과 요약 대신 이것만이라 `화면`·`검사` 줄과 `보냄` 칸이 없어요. 둘째 줄은 낱말 사이 자동 줄바꿈 대신 문장 뒤에서 끊어요(DESIGN).
+ */
+export function renderSummaryInterrupted(kept: number, p: Painter): string {
+  const L: string[] = [];
+  L.push(...wrapText(SUMMARY_TEXT.interrupted, `${p.bold('[취소]')} `, '       '));
+  if (kept > 0) L.push(`       ${SUMMARY_TEXT.interruptedKept(kept)}`);
+  L.push(...wrapText(SUMMARY_TEXT.interruptedNext, '다음: ', '      '));
+  return `${L.join('\n')}\n`;
 }
 
 /** 이번 실행이 쓴 일지 하나 */
@@ -221,6 +386,52 @@ export function renderRunSummary(r: RunSummary, stream: NodeJS.WriteStream = pro
     row('이름·이메일', '꺼짐');
   }
 
+  // 6-1 AI 요약 (DESIGN S3 가·나 6-1, PRD S3·A24·A28): 켠 실행이면 늘 세 줄까지(요약한 세션 / 못 한 세션 / 남은 세션 문장),
+  // 끈 실행은 ① 요약 줄이 빠진 날짜(--date·--from)나 ② 요약이 빈 세션이 남은 요약 일지(기본 실행)일 때만 두 줄. 그 밖의 끈 실행은 칸이 없어요.
+  // 6-2 보냄: 켠 실행에서 보낸 세션이 1개 이상일 때만(괄호는 늘 다음 줄). 여러 날짜여도 합계 한 번이에요.
+  const sm = r.mode === 'make' ? r.summary : undefined;
+  const label = p.bold(padW(SUMMARY_TEXT.label, LABEL_W));
+  const indent = ' '.repeat(LABEL_W);
+  // 1·2줄과 이유별 [알림]의 수 (멈춘 까닭이 이번에 쓴 일지 밖에만 있어도 빠지지 않게, 취합 22회차 차이 1)
+  const smCounts = sm ? summaryCounts(sm) : null;
+  if (sm?.on && smCounts) {
+    const summarized = sm.newly + sm.reused;
+    if (smCounts.targets === 0) {
+      L.push(`${label}${SUMMARY_TEXT.noTargets}`);
+    } else {
+      const parts = SUMMARY_TEXT.onParts(sm.newly, sm.reused);
+      const head = SUMMARY_TEXT.onHead(summarized);
+      const one = parts.length ? `${head} (${parts.join(' · ')})` : head;
+      // 80칸을 넘으면 괄호를 통째로 다음 줄(값 칸)로 내려요(공통 규칙).
+      if (displayWidth(`${padW(SUMMARY_TEXT.label, LABEL_W)}${one}`) <= 80 || !parts.length) L.push(`${label}${one}`);
+      else L.push(`${label}${head}`, `${indent}(${parts.join(' · ')})`);
+      const counts = SUMMARY_REASON_ORDER.map((k) => [k, k === 'deferred' ? sm.deferred : smCounts.failed[k]] as const).filter(([, n]) => n > 0);
+      if (counts.length > 0) {
+        const total = counts.reduce((n, [, c]) => n + c, 0);
+        // 80칸을 넘으면 덩어리 사이에서 끊고 줄 끝에 ·를 남겨 괄호 안쪽(값 칸 + 1칸)에 맞춰요.
+        const chunks = counts.map(([k, n], i) => `${i === 0 ? SUMMARY_TEXT.failedHead(total) : ''}${SUMMARY_TEXT.reason[k]} ${num(n)}개${i === counts.length - 1 ? ')' : ''}`);
+        L.push(...wrapParts(chunks, ' · ', indent, `${indent} `));
+      }
+    }
+    if (sm.remaining) {
+      // 상한에 닿았는지는 "50번을 다 실행했고 부를 세션이 더 남았는지"예요(PRD A24, 취합 20회차 차이 2). 미룬 세션이 다시 만들지 않은 ③ 일지에만
+      // 있으면 2줄에 `50번 상한으로 미룸`이 없어도 이 문장이 상한 모양이에요.
+      const capped = sm.capReached ?? sm.deferred > 0;
+      const text = capped ? SUMMARY_TEXT.remainingCap(sm.remaining.sessions, sm.remaining.days) : SUMMARY_TEXT.remaining(sm.remaining.sessions, sm.remaining.days);
+      L.push(...wrapText(text, indent, indent));
+    }
+    if (sm.sent > 0) {
+      L.push(`${p.bold(padW(SUMMARY_TEXT.sentLabel, LABEL_W))}${SUMMARY_TEXT.sent}`);
+      cont(SUMMARY_TEXT.sentNote(sm.sent));
+    }
+  } else if (sm && sm.droppedDays.length > 0) {
+    L.push(`${label}${SUMMARY_TEXT.droppedHead(sm.droppedDays.length)}`);
+    cont(SUMMARY_TEXT.droppedTodo);
+  } else if (sm && sm.showRemaining && sm.remaining) {
+    L.push(`${label}${SUMMARY_TEXT.remainingOffHead(sm.remaining.days, sm.remaining.sessions)}`);
+    cont(SUMMARY_TEXT.remainingOffTodo);
+  }
+
   // 기록 형식 (A13, DESIGN S3 7번): 이 도구의 기준 버전과 수만 적어요. 기준보다 옛 버전은 [알림] 없이 "옛 형식 파일 N개"로 수만 보여 줘요.
   // 건너뛴 줄은 모르는 줄 종류 + 읽을 수 없는 줄 + 꼭 필요한 값(timestamp·cwd·sessionId)이 없어 버린 요청·답변 줄을 합쳐 세고,
   // 다음 줄에 이유별로 나눠 보여 줘요(0인 이유는 빼요). 2026-10-20에 처음 본 12가지는 아는 줄이라 세지 않아요(A13).
@@ -302,6 +513,24 @@ export function renderRunSummary(r: RunSummary, stream: NodeJS.WriteStream = pro
     notices.push(...dateLines(mk.identityOff));
     notices.push(...wrapText(MAKE_TEXT.identityOffTodo, AFTER, AFTER));
     if (mk.rerunHideCommand) notices.push(`${AFTER}  ${mk.rerunHideCommand}`);
+  }
+  // AI 요약 [알림] (DESIGN S3 가·나 10번, PRD A27·A28): 이름·이메일 끈 채 다시 만듦 [알림] 다음, `결과` 칸 바로 위예요.
+  // 요약 저장 파일을 읽지 못함(1줄 · 파일마다 절대 경로와 괄호 · 정해진 두 줄) → 요약을 하지 못한 까닭마다 한 덩어리(켠 실행만, 6-1 2줄 순서,
+  // 50번 상한으로 미룸은 6-1 3줄이 알려서 [알림]이 없어요). 종료 코드는 그대로예요(요약 실패를 일지 만들기 실패로 보지 않아요).
+  if (sm) {
+    if (sm.storeProblems.length > 0) {
+      notice(SUMMARY_TEXT.storeHead(sm.storeProblems.length));
+      for (const sp of sm.storeProblems) notices.push(`${AFTER}${sp.path} (${sp.code ?? SUMMARY_TEXT.storeBroken})`);
+      for (const t of SUMMARY_TEXT.storeTodo) notices.push(`${AFTER}${t}`);
+    }
+    if (sm.on && smCounts) for (const k of FAIL_REASONS) if (smCounts.failed[k] > 0) notice(SUMMARY_TEXT.todo[k](smCounts.failed[k]));
+    // 받은 요약을 요약 저장 파일에 쓰지 못함 (PRD A27, DESIGN S3 10번 정리 회차, 취합 20회차 차이 8): 요약 [알림]의 맨 끝이에요(실행에서 일어난 순서).
+    // 1줄(쓰지 못한 요약 수) · 파일마다 절대 경로와 원인 코드 괄호(알 수 없으면 괄호 없음, 날짜 순서) · 끝 세 줄.
+    if (sm.storeWriteFailed.length > 0) {
+      notice(SUMMARY_TEXT.storeWriteFailed(sm.storeWriteFailed.reduce((n, f) => n + f.sessions, 0)));
+      for (const f of sm.storeWriteFailed) notices.push(`${AFTER}${f.path}${f.code ? ` (${f.code})` : ''}`);
+      for (const t of SUMMARY_TEXT.storeWriteFailedTodo) notices.push(`${AFTER}${t}`);
+    }
   }
 
   if (a.atRiskAfter.sessions > 0 || a.errors.length > 0) {

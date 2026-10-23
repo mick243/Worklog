@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import { emptyIndex, IndexError, loadIndex, type ArchiveIndex } from '../archive/archive.js';
 import { dataPaths, type Config } from '../config.js';
 import { errorCode, isAccessError, probeWritable, relPosix, renameStrict, walkFiles, writeFileDurable } from '../util/fs.js';
+import { parseSummaryFile } from '../summary/store.js';
 import { parseJsonText } from '../util/json.js';
 import { readRawLines } from '../util/lines.js';
 import { mdCode, mdEscape, mdUnescape } from '../util/text.js';
@@ -27,7 +28,8 @@ import { markBroken, RecoveryError, removeJournal, removeStaged, STAGED_SUFFIX, 
 import { countMarkers } from './marker.js';
 import { mergeCounts, totalCount, type Counts, type Redactor } from './redact.js';
 
-export type FileKind = 'archive' | 'worklog-md' | 'worklog-json';
+/** summary: 요약 저장 파일 (AI 요약 한 줄, A27). 보관본과 같은 규칙으로 다시 가려요(요약 글 칸만, 세션 아이디·하루 범위·표지·시각은 그대로). */
+export type FileKind = 'archive' | 'worklog-md' | 'worklog-json' | 'summary';
 
 export interface FilePlan {
   kind: FileKind;
@@ -83,8 +85,9 @@ export interface RedactPlan {
   dataDir: string;
   builtinRules: number;
   userPatterns: string[];
-  scanned: { archives: number; worklogDays: number };
-  /** 바뀌는 파일만. 보관본(경로순) → 일지(경로순) */
+  /** summaries: 읽은 요약 저장 파일 수 (요약을 켠 적이 없으면 0) */
+  scanned: { archives: number; worklogDays: number; summaries: number };
+  /** 바뀌는 파일만. 보관본(경로순) → 일지·요약 저장 파일(경로순) */
   files: FilePlan[];
   totals: Counts;
   /** 다시 가리기로 고칠 수 없는 남은 의심 (읽을 수 없는 줄, 손으로 고친 일지 줄 등). 검사(S4)가 계속 보여 줘요. */
@@ -245,6 +248,8 @@ function redactDayContent(day: DayLog, redactor: Redactor): { day: DayLog; count
     for (const s of Array.isArray(p.sessions) ? p.sessions : []) {
       if (!s || typeof s !== 'object') continue;
       s.title = text(s.title, mdEscape);
+      // AI 요약 줄도 일지의 글이라 같이 다시 가려요(마크다운의 요약 줄 조각도 함께 바뀌어요, A27).
+      s.summary = text(s.summary, mdEscape);
       s.firstRequest = text(s.firstRequest, mdEscape);
       s.lastRequest = text(s.lastRequest, mdEscape);
       if (Array.isArray(s.branches)) s.branches = s.branches.map((b) => text(b, mdCode));
@@ -438,6 +443,65 @@ function planWorklogs(dataDir: string, redactor: Redactor, problems: AccessProbl
   return { files, days: dates.length, unfixable, mismatched };
 }
 
+// ---- 요약 저장 파일 (A27) ----
+
+/**
+ * 요약 저장 파일(summaries/<날짜>.json)을 지금 규칙으로 다시 가려요. 요약 글 칸만 바꾸고 세션 아이디·하루 범위·표지·만든 시각은 그대로예요
+ * (A16의 날짜·시각·해시·세션 아이디 칸과 같아요). 읽지 못한 파일은 말없이 건너뛰지 않고 알리고, 깨진 파일은 고칠 수 없는 의심으로 세요.
+ */
+function planSummaries(dataDir: string, redactor: Redactor, problems: AccessProblem[]): { files: FilePlan[]; scanned: number; unfixable: number } {
+  const dir = dataPaths(dataDir).summariesDir;
+  let names: string[] = [];
+  try {
+    names = readdirSync(dir)
+      .filter((n) => /^\d{4}-\d{2}-\d{2}\.json$/.test(n))
+      .sort();
+  } catch (err) {
+    const code = errorCode(err);
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') problems.push({ rel: relPosix(dataDir, dir), code, op: 'read' });
+    names = [];
+  }
+  const files: FilePlan[] = [];
+  let unfixable = 0;
+  for (const name of names) {
+    const path = join(dir, name);
+    const r = readTextFile(path);
+    if (r.code !== null) {
+      problems.push({ rel: relPosix(dataDir, path), code: r.code, op: 'read' });
+      continue;
+    }
+    if (r.text === null) continue;
+    // 깨진 파일(JSON이 아니거나 요약 저장 파일 모양이 아님)은 고칠 수 없어요. 검사도 같은 기준으로 읽지 못한 파일(깨진 파일)로 세요(parseSummaryFile).
+    const data = parseSummaryFile(r.text);
+    if (!data) {
+      unfixable++;
+      continue;
+    }
+    const next = structuredClone(data) as { sessions: Array<{ summary?: unknown }> };
+    const counts: Counts = {};
+    for (const e of next.sessions) {
+      if (e && typeof e === 'object' && typeof e.summary === 'string') e.summary = redactor.redactString(e.summary, counts);
+    }
+    unfixable += totalCount(redactor.detectDeep(next));
+    const total = totalCount(counts);
+    if (total > 0) {
+      const plan: FilePlan = {
+        kind: 'summary',
+        path,
+        rel: relPosix(dataDir, path),
+        counts,
+        total,
+        ...statOf(path),
+        content: `${JSON.stringify(next, null, 1)}\n`,
+      };
+      const code = probeWritable(path);
+      if (code) problems.push({ rel: plan.rel, code, op: 'write' });
+      files.push(plan);
+    }
+  }
+  return { files, scanned: names.length, unfixable };
+}
+
 // ---- 계획 ----
 
 export interface PlanOptions {
@@ -538,13 +602,16 @@ export async function buildRedactPlan(cfg: Config, redactor: Redactor, opts: Pla
   const w = planWorklogs(cfg.dataDir, redactor, problems);
   files.push(...w.files);
   unfixable += w.unfixable;
+  const sm = planSummaries(cfg.dataDir, redactor, problems);
+  files.push(...sm.files);
+  unfixable += sm.unfixable;
   for (const f of files) mergeCounts(totals, f.counts);
 
   return {
     dataDir: cfg.dataDir,
     builtinRules: redactor.builtin.length + 1, // 형식 규칙 + 이름=값 규칙
     userPatterns: redactor.user.map((r) => r.label),
-    scanned: { archives: archives.length, worklogDays: w.days },
+    scanned: { archives: archives.length, worklogDays: w.days, summaries: sm.scanned },
     files,
     totals,
     unfixable,

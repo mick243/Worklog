@@ -1,4 +1,6 @@
 // 검사 명령 (F2): ① 내장 가짜 비밀 값으로 패턴마다 잡히는지 시험하고 ② 이미 만든 일지·보관본을 다시 훑어 남은 의심 문자열을 세요.
+// 요약 저장 파일(AI 요약 한 줄, A27)도 보관본처럼 다시 훑어 파일마다 남은 의심을 세요. 이름·이메일 가리기를 쓰지 않는 재료라 남은 이름·이메일은 세지 않아요.
+// 일지의 AI 요약 줄은 일지의 일부라 다른 글과 똑같이 검사해요(남은 의심, 켠·끈 일지의 남은 이름·이메일).
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { dataPaths, type Config } from '../config.js';
@@ -8,7 +10,8 @@ import { countMarkers, marker } from '../redact/marker.js';
 import { loadUserPatterns, Redactor, type Counts } from '../redact/redact.js';
 import { builtinSamples, negativeSamples } from '../redact/samples.js';
 import { progress } from '../term/format.js';
-import { renderCheckReport, UNREADABLE, type CheckReport } from '../term/s4-check.js';
+import { parseSummaryFile } from '../summary/store.js';
+import { renderCheckReport, SUMMARY_BROKEN, UNREADABLE, type CheckReport } from '../term/s4-check.js';
 import { errorCode, relPosix, walkFiles } from '../util/fs.js';
 import { parseJsonText } from '../util/json.js';
 import { readLines } from '../util/lines.js';
@@ -32,7 +35,8 @@ function addUnreadable(into: CheckReport['findings'], file: string, code: string
   into.push({ file, line: 0, kind: UNREADABLE, code });
 }
 
-type Finding = { file: string; line: number; kind: string };
+/** code가 있으면 읽지 못한 파일이에요(원인 코드, 깨진 요약 저장 파일은 SUMMARY_BROKEN). */
+type Finding = { file: string; line: number; kind: string; code?: string };
 
 /** 파일 하나를 훑으며 찾은 것이에요. 끝까지 읽었을 때만 검사 보고에 더해요(collectFile). */
 export interface FileScan {
@@ -138,11 +142,12 @@ export async function buildCheckReport(cfg: Config): Promise<CheckReport> {
     builtin,
     negatives,
     user,
-    scanned: { worklogs: 0, archives: 0 },
+    scanned: { worklogs: 0, archives: 0, summaries: 0 },
     markers: { worklog: {}, archive: {} },
+    summaryUsed: false,
     findings: [],
     identity: { counted: false, worklogs: 0, userNames: 0, emails: 0, findings: [] },
-    identityOff: { worklogs: 0, userNames: 0, emails: 0 },
+    identityOff: { worklogs: 0, userNames: 0, emails: 0, summaryWorklogs: 0 },
     passed: false,
     mismatched: [],
     identityDays: [],
@@ -165,18 +170,29 @@ export async function buildCheckReport(cfg: Config): Promise<CheckReport> {
     (n) => n.toLowerCase().endsWith('.jsonl'),
     (dir, code) => addUnreadable(report.findings, relPosix(cfg.dataDir, dir), code),
   );
+  // 요약 저장 파일 (A27). 폴더가 없으면 요약을 켠 적이 없는 거예요. 있는데 읽지 못하면 말없이 넘기지 않아요.
+  let summaryNames: string[] = [];
+  try {
+    summaryNames = readdirSync(paths.summariesDir)
+      .filter((n) => /^\d{4}-\d{2}-\d{2}\.json$/.test(n))
+      .sort();
+  } catch (err) {
+    const code = errorCode(err);
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') addUnreadable(report.findings, relPosix(cfg.dataDir, paths.summariesDir), code);
+  }
   const prog = progress('훑는 중');
-  const total = worklogNames.length + archives.length;
+  const total = worklogNames.length + archives.length + summaryNames.length;
   /** 날짜별 마크다운의 가림 표시 수와 남은 의심 수 (한쪽만 가려진 일지 알아보기, 끝까지 읽은 마크다운만) */
   const mdByDate = new Map<string, { markers: Counts; found: number }>();
   /** 날짜별 화면용 일지 데이터에 남은 그 일지의 설정 (없거나 깨졌으면 null). 날짜마다 한 번만 읽어요. */
-  const settingsByDate = new Map<string, { hideIdentity?: boolean; dayStartHour?: number } | null>();
+  type DaySettings = { hideIdentity?: boolean; dayStartHour?: number; summaryEnabled?: boolean };
+  const settingsByDate = new Map<string, DaySettings | null>();
   const settingsOf = (date: string) => {
     if (!settingsByDate.has(date)) {
-      let s: { hideIdentity?: boolean; dayStartHour?: number } | null = null;
+      let s: DaySettings | null = null;
       try {
         const day = parseJsonText(readFileSync(join(paths.worklogsDir, `${date}.json`), 'utf8'));
-        if (day && typeof day === 'object') s = day as { hideIdentity?: boolean; dayStartHour?: number };
+        if (day && typeof day === 'object') s = day as DaySettings;
       } catch {
         /* JSON이 없거나 깨졌으면 설정값만 봐요 */
       }
@@ -186,6 +202,7 @@ export async function buildCheckReport(cfg: Config): Promise<CheckReport> {
   };
   let done = 0;
   const onDates = new Set<string>();
+  const offSummaryDates = new Set<string>();
   const offDates = new Set<string>();
   /** 날짜별 일지 두 파일의 사용자 이름·이메일 (PRD A23: 다 훑은 뒤 마크다운 자리 기준으로 세요) */
   const idByDate = new Map<string, DayIdentityScan>();
@@ -198,8 +215,12 @@ export async function buildCheckReport(cfg: Config): Promise<CheckReport> {
     // 끈 일지도 값 없이 수만 세어 [알림]으로 알리고, 판정·종료 코드에는 넣지 않아요(PRD F2·S4·A19).
     // 두 일지 모두 "건"은 마크다운에서 찾은 자리예요(PRD A23, identityOfDay). 여기서는 파일마다 찾아 두기만 해요.
     const idOn = cfg.hideIdentity || settingsOf(date)?.hideIdentity === true;
+    // 요약을 켜고 만든 일지가 있으면 S4 "놓칠 수 있는 것" 줄에 AI 요약 이야기를 더해요(A27).
+    if (settingsOf(date)?.summaryEnabled === true) report.summaryUsed = true;
     // 켠 일지·끈 일지의 수는 날짜 수예요(DESIGN S4 5번). .md·.json 중 하나만 남은 날짜도 세요.
     (idOn ? onDates : offDates).add(date);
+    // 끈 일지 중 요약을 켜고 만든 일지 (S4 끈 일지 [알림]의 `--summary도 붙이세요` 한 줄, DESIGN S4 12번)
+    if (!idOn && settingsOf(date)?.summaryEnabled === true) offSummaryDates.add(date);
     if (idOn) report.identity.counted = true;
     const day = idByDate.get(date) ?? { idOn, md: null, json: null };
     idByDate.set(date, day);
@@ -252,6 +273,7 @@ export async function buildCheckReport(cfg: Config): Promise<CheckReport> {
   }
   report.identity.worklogs = onDates.size;
   report.identityOff!.worklogs = offDates.size;
+  report.identityOff!.summaryWorklogs = offSummaryDates.size;
   // 남은 이름·이메일을 날짜마다 마크다운 자리 기준으로 세요(PRD A23, I-29). 켠 일지는 위치와 함께 판정에 넣고(수에 든 자리만 목록에),
   // 끈 일지는 값·위치 없이 수만 [알림]으로 알려요(A19). 남은 의심(비밀 값) 수는 그대로 파일마다 찾은 자리를 더해요.
   for (const [, day] of [...idByDate.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
@@ -284,6 +306,27 @@ export async function buildCheckReport(cfg: Config): Promise<CheckReport> {
         }
         addFindings(part.findings, rel, lineNo, redactor.detectDeep(obj));
       }
+    });
+    prog.update(++done, total);
+  }
+
+  // 요약 저장 파일: 파일 전체를 지금 규칙으로 다시 훑어 남은 의심을 세요(보관본과 같은 규칙, A27). `남은 의심`에만 들어요.
+  // 파일을 열지 못했으면 "읽지 못함"과 원인 코드예요. 열리지만 깨진 파일(JSON이 아니거나 요약 저장 파일 모양이 아님)도 읽지 못한 파일 한 건이고
+  // 원인 코드 대신 깨졌다는 표시예요. 일지 만들기가 같은 파일을 저장한 요약이 없는 것으로 보는 것과 같은 기준이에요(parseSummaryFile).
+  // 다시 가리기로 고쳐지지 않아서 다음: 줄도 따로예요(지워도 일지는 그대로, 요약을 켜고 그 날짜를 다시 만들면 다시 불러요, PRD S4·A27, 취합 20회차 차이 7).
+  for (const name of summaryNames) {
+    report.scanned.summaries = (report.scanned.summaries ?? 0) + 1;
+    report.summaryUsed = true;
+    const full = join(paths.summariesDir, name);
+    const rel = relPosix(cfg.dataDir, full);
+    // 가림 표시 수는 세지 않아요(같은 날짜 일지의 작업 내용 줄에 같은 자리로 보여서 칸을 따로 두지 않아요, DESIGN S4 5번).
+    await collectFile(report, rel, {}, (part) => {
+      const file = parseSummaryFile(readFileSync(full, 'utf8'));
+      if (!file) {
+        part.findings.push({ file: rel, line: 0, kind: UNREADABLE, code: SUMMARY_BROKEN });
+        return;
+      }
+      addFindings(part.findings, rel, 0, redactor.detectDeep(file));
     });
     prog.update(++done, total);
   }

@@ -17,6 +17,8 @@ import { BusyError } from './util/lock.js';
 import { toolVersion } from './util/version.js';
 
 // 도움말 (I-32): DESIGN 3장 "도움말 출력"의 50줄을 글자 그대로 써요. 모든 줄이 80칸(표시 폭, term/format.ts의 displayWidth) 안이에요.
+// AI 요약 회차(PRD A28, DESIGN 3장 "도움말 출력" 2026-10-22): --hide-identity 다음에 --summary 세 줄, 설정 파일 예에 "summary": false를
+// 더해(쉼표 뒤에서 끊어 첫 키 자리 9칸째) 54줄이에요. 가장 긴 줄은 그대로 79칸이에요.
 // 80칸을 넘던 설명은 괄호를 통째로 다음 줄 설명 자리(사용법 42칸째, 날짜 옵션·옵션 25칸째)로 내리거나 뜻을 지키며 줄였어요.
 // 설정 파일 예시는 파일 줄 다음 줄(2칸 + "예) ")이고, patterns.json 예시는 쉼표 뒤에서 끊어 첫 키 자리(9칸)에 맞춰요(끊어도 JSON 그대로).
 const HELP = `cc-worklog — Claude Code 세션과 git log로 비밀 값을 가린 날짜별 일지를 만들어요
@@ -44,6 +46,9 @@ const HELP = `cc-worklog — Claude Code 세션과 git log로 비밀 값을 가�
   --day-start <시>       하루가 바뀌는 시각 0~23 (기본: 3, 새벽 3시)
   --hide-identity        일지에서 경로 속 사용자 이름과 이메일 주소도 가려요
                          (보관본에는 쓰지 않아요)
+  --summary              일지에 세션마다 AI가 쓴 작업 내용 한 줄을 더해요
+                         (가린 대화 글을 Claude Code로 Anthropic에 보내요)
+                         Claude Code 사용량을 써요 (실행마다 claude 50번까지)
   --claude-dir <폴더>    Claude Code 폴더
                          (기본: CLAUDE_CONFIG_DIR 또는 ~/.claude)
   --data-dir <폴더>      cc-worklog 데이터 폴더
@@ -55,7 +60,8 @@ const HELP = `cc-worklog — Claude Code 세션과 git log로 비밀 값을 가�
   -v, --version          버전
 
 설정 파일   <데이터 폴더>/config.json
-  예) { "roots": ["C:/work"], "dayStartHour": 3, "hideIdentity": false }
+  예) { "roots": ["C:/work"], "dayStartHour": 3, "hideIdentity": false,
+        "summary": false }
 사용자 패턴 <데이터 폴더>/patterns.json
   예) [{ "name": "사내 토큰", "pattern": "CORP-[0-9]{8}",
          "samples": ["CORP-12345678"] }]
@@ -91,6 +97,8 @@ async function main(argv: string[]): Promise<number> {
     roots: args.roots,
     dayStart: args.dayStart === undefined ? undefined : Number(args.dayStart),
     hideIdentity: args.hideIdentity ? true : undefined,
+    // --summary는 일지 만들기에서만 받아요(args.ts가 다른 명령이면 사용법 오류로 멈춰요). config.json의 summary도 일지 만들기만 봐요(A24).
+    summary: args.summary ? true : undefined,
   });
 
   switch (args.command) {

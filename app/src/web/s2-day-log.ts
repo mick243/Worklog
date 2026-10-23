@@ -4,7 +4,7 @@
 // 요청 글은 마크다운·HTML로 해석하지 않고 글자 그대로 보여 줘요.
 import { num } from '../util/text.js';
 import { clockLabel, dateWithWeekday, duration, isNextCalendarDay, localDateTime } from '../util/time.js';
-import { projectTotals, totalsNote, usageText } from '../worklog/markdown.js';
+import { projectTotals, summarizedCount, totalsNote, usageText } from '../worklog/markdown.js';
 import type { CommitLog, DayLog, ProjectLog, SessionLog } from '../worklog/types.js';
 import { archiveOnlyHelp, dayBadge, sessionBadge, stateShape } from './badge.js';
 import { basisLine } from './basis-line.js';
@@ -36,6 +36,24 @@ export interface S2Data {
 }
 
 const pad2 = (n: number) => String(n).padStart(2, '0');
+
+/**
+ * AI 요약 한 줄 (A24)의 화면 문구 (DESIGN S2 "작업 내용 줄"·알림 줄의 "AI 요약 풀이 줄" 글자 그대로). 마크다운과 같은 뜻이에요.
+ * 문구를 바꿀 때는 여기만 바꾸면 돼요. 요약을 끈 일지에는 이 줄들이 없어요.
+ */
+export const S2_SUMMARY_TEXT = {
+  /** 세션 카드 안 이름표 (요청 줄의 이름표와 같은 모양) */
+  label: '작업 내용',
+  /** AI가 쓴 글이라는 표시 (.ai-mark, 테두리만 있는 무채색 작은 표시) */
+  mark: 'AI 요약',
+  /** 알림 줄 맨 끝 풀이 줄: 첫 문장 */
+  help: '작업 내용(AI 요약)은 가린 대화 글을 Claude Code로 보내 AI가 쓴 한 줄이라 틀릴 수 있어요.',
+  /** 둘째 문장 (수는 마크다운 머리의 AI 요약 줄과 같은 값). 세션이 0개면 `이 날은 요약할 세션이 없어요.` */
+  count: (summarized: number, sessions: number) => (sessions === 0 ? '이 날은 요약할 세션이 없어요.' : `이 날 세션 ${num(sessions)}개 중 ${num(summarized)}개에 있어요.`),
+  /** 요약이 빈 요약 대상 세션이 있으면 끝에 (명령은 고정폭) */
+  emptyBefore: '빈 세션은 터미널에서 ',
+  emptyAfter: '를 실행하면 최근 날짜부터 이어서 채워요.',
+} as const;
 const cmds = (d: S2Data) => ({ makeCommand: d.makeCommand ?? 'cc-worklog', archiveCommand: d.archiveCommand });
 
 function footer(d: S2Data): Html {
@@ -68,6 +86,18 @@ function hasWholeSession(day: DayLog): boolean {
   );
 }
 
+/**
+ * 알림 줄 맨 끝의 AI 요약 풀이 줄 (요약을 켜고 만든 일지면 늘 한 번, DESIGN S2 5번). 요약을 켰다는 것과 요약한 세션 수를 알려요.
+ * 요약이 빈 요약 대상 세션이 있으면 터미널에서 실행할 명령을 글로만 알려요(화면은 요약을 부르지 않아요, PRD A24).
+ */
+function summaryHelp(day: DayLog, makeCommand: string): Html {
+  const sessions = day.projects.flatMap((p) => p.sessions);
+  const empty = sessions.some((s) => s.summaryTarget === true && !(typeof s.summary === 'string' && s.summary));
+  return html`<p class="summary-help muted">${S2_SUMMARY_TEXT.help} ${S2_SUMMARY_TEXT.count(summarizedCount(day), day.totals.sessions)}${
+    empty ? html` ${S2_SUMMARY_TEXT.emptyBefore}<code>${makeCommand} --summary</code>${S2_SUMMARY_TEXT.emptyAfter}` : null
+  }</p>`;
+}
+
 function timeCell(ms: number, date: string): Html {
   return html`<span class="mono">${clockLabel(ms, date).replace('(다음 날)', '')}</span>${
     isNextCalendarDay(ms, date) ? html` <span class="muted next-day">다음 날</span>` : null
@@ -89,6 +119,13 @@ function sessionCard(s: SessionLog, date: string, noRepo: boolean, st: SessionSt
       : null
   }${s.branches.length ? html` · 브랜치 ${s.branches.map((b, i) => html`${i ? ', ' : ''}<code class="branch">${withMarkers(b)}</code>`)}` : null} · 요청 ${num(s.requests)}개</p>
 ${noRepo && s.cwd ? html`<p class="session__cwd"><span class="label muted">작업 폴더</span> <span class="mono path">${withMarkers(s.cwd)}</span></p>` : null}
+${
+  // AI가 쓴 작업 내용 한 줄 (요약을 켠 일지만, A24). 요청 글처럼 글자 그대로 보여 주고 가린 자리는 다른 글처럼 칩으로 표시해요.
+  // 화면은 요약을 부르지 않고 일지에 저장된 글만 보여 줘요. 요약하지 못한 세션은 줄을 비워 둬요.
+  typeof s.summary === 'string' && s.summary
+    ? html`<p class="session__summary"><span class="label muted">${S2_SUMMARY_TEXT.label}</span> <span class="ai-mark">${S2_SUMMARY_TEXT.mark}</span> ${withMarkers(s.summary)}</p>`
+    : null
+}
 ${
   same
     ? html`<p class="session__req"><span class="label muted">요청</span> ${withMarkers(s.firstRequest!)}</p>`
@@ -173,6 +210,7 @@ ${!day.gitAvailable ? html`<div class="banner banner--info">git을 찾지 못해
 ${redTotal > 0 ? html`<p class="redacted-help muted">${withMarkers('[가림:종류]')} 이 모양은 비밀 값을 종류 표시로 바꾼 자리예요. 원문은 어디에도 저장하지 않았어요.</p>` : null}
 ${hasWholeSession(day) ? html`<p class="whole-help muted">(세션 전체)는 여러 날에 걸친 세션이라 그날 값이 아니라 세션 전체 값이라는 뜻이에요.</p>` : null}
 ${d.status?.state === 'archive-only' ? archiveOnlyHelp() : null}
+${day.summaryEnabled === true ? summaryHelp(day, cmds(d).makeCommand) : null}
 ${
   day.projects.length >= 2
     ? html`<nav class="toc" aria-label="프로젝트 목차"><span class="label muted">목차</span> ${day.projects.map(
